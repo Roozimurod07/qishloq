@@ -19,7 +19,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 BOT_TOKEN = "8867325304:AAFHOVKs8HsR8z02tSL8NcUeXmLZlPKCzNQ"
 ADMINS = [8317043750]  
 
-GOOGLE_SHEET_NAME = "Qishloq"  
+GOOGLE_SHEET_NAME = "Qorabayir"  
 
 # --- LOGGING VA BOT INITIALIZATSIYASI ---
 logging.basicConfig(level=logging.INFO)
