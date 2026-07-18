@@ -3,7 +3,6 @@ import logging
 import json
 import os
 import io
-import re
 import sqlite3
 from datetime import datetime
 from aiogram import Bot, Dispatcher, F, types
@@ -14,7 +13,6 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 import gspread
 import openpyxl 
-import pandas as pd
 from oauth2client.service_account import ServiceAccountCredentials
 
 # --- SOZLAMALAR ---
@@ -66,7 +64,6 @@ def get_all_db_users():
         print(f"❌ SQLite xatolik (get): {e}")
         return []
 
-# Bot yuritilishi bilan bazani tekshirib olamiz
 init_db()
 
 
@@ -83,7 +80,7 @@ def get_google_sheet():
     return client.open(GOOGLE_SHEET_NAME).sheet1
 
 
-def log_to_sheets(user_id, full_name="", username="", phone="", code="", status="", admin_name=""):
+def log_to_sheets(user_id, owner_name="", full_name="", username="", phone="", code="", status="", admin_name=""):
     try:
         sheet = get_google_sheet()
         all_records = sheet.get_all_values()
@@ -91,19 +88,22 @@ def log_to_sheets(user_id, full_name="", username="", phone="", code="", status=
         username_str = f"@{username}" if username else "Mavjud emas"
         
         row_index = -1
+        # Qidiruv: Agar Telegram ID va Telefon mos kelsa (Telefon 5-ustunda, Telegram ID 2-ustunda)
         for idx, row in enumerate(all_records):
-            if len(row) >= 4:
-                if row[0] == str(user_id) and row[3] == str(phone):
+            if len(row) >= 5:
+                if row[1] == str(user_id) and row[4] == str(phone):
                     row_index = idx + 1
                     break
         
         if row_index != -1:
-            if code: sheet.update_cell(row_index, 5, str(code))
-            if status: sheet.update_cell(row_index, 6, status)
-            sheet.update_cell(row_index, 7, now)
-            if admin_name: sheet.update_cell(row_index, 8, admin_name)
+            if owner_name: sheet.update_cell(row_index, 1, owner_name)
+            if code: sheet.update_cell(row_index, 6, str(code))
+            if status: sheet.update_cell(row_index, 7, status)
+            sheet.update_cell(row_index, 8, now)
+            if admin_name: sheet.update_cell(row_index, 9, admin_name)
         else:
-            sheet.append_row([str(user_id), full_name, username_str, str(phone), str(code), status, now, admin_name])
+            # Yangi qator tartibi: Raqam Egasi | Telegram ID | Telegram Ism | Username | Telefon | Kod | Holat | Vaqt | Admin
+            sheet.append_row([owner_name, str(user_id), full_name, username_str, str(phone), str(code), status, now, admin_name])
             
     except Exception as e:
         print(f"❌ Google Sheets xatolik: {e}")
@@ -111,6 +111,7 @@ def log_to_sheets(user_id, full_name="", username="", phone="", code="", status=
 
 # --- FSM (STATE) HOLATLARI ---
 class VoteState(StatesGroup):
+    waiting_for_owner_name = State()   # Yangi holat: Raqam egasining ismi
     waiting_for_phone = State()
     waiting_for_code = State()
     waiting_for_screenshot = State()
@@ -143,6 +144,11 @@ def phone_share_keyboard():
     builder.button(text="📱 Telefon raqamni yuborish", request_contact=True)
     builder.button(text="❌ Bekor qilish")
     builder.adjust(1)
+    return builder.as_markup(resize_keyboard=True)
+
+def cancel_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="❌ Bekor qilish")
     return builder.as_markup(resize_keyboard=True)
 
 
@@ -300,27 +306,47 @@ async def process_help(message: types.Message):
     await message.answer(text, parse_mode="HTML", reply_markup=inline_kb.as_markup())
 
 
-# --- OVOZ BERISH START ---
+# --- OVOZ BERISH START (ISIM SO'RASH) ---
 @dp.message(F.text == "🗳 Ovoz berish")
 async def start_voting(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    
     await state.clear() 
     
     if user_id in claimed_users: del claimed_users[user_id]
     if user_id in claimed_admin_names: del claimed_admin_names[user_id]
         
     await message.answer(
-        "Iltimos, ovoz beradigan telefon raqamingizni quyidagi tugma orqali yuboring yoki qo'lda yozib kiriting:\n\n<b>(Format: +998901234567)</b>",
-        parse_mode="HTML", reply_markup=phone_share_keyboard()
+        "📝 Ovoz beriladigan **raqam kimning nomida?**\n\nIltimos, fuqaroning ismi va familiyasini kiriting:",
+        parse_mode="Markdown", reply_markup=cancel_keyboard()
     )
-    await state.set_state(VoteState.waiting_for_phone)
+    await state.set_state(VoteState.waiting_for_owner_name)
 
 
+@dp.message(F.text == "❌ Bekor qilish", VoteState.waiting_for_owner_name)
 @dp.message(F.text == "❌ Bekor qilish", VoteState.waiting_for_phone)
 async def cancel_voting(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("Ovoz berish jarayoni bekor qilindi.", reply_markup=main_menu())
+
+
+# --- ISMNI QABUL QILISH VA RAQAM SO'RASH ---
+@dp.message(VoteState.waiting_for_owner_name)
+async def process_owner_name(message: types.Message, state: FSMContext):
+    if message.text == "❌ Bekor qilish":
+        await state.clear()
+        await message.answer("Ovoz berish jarayoni bekor qilindi.", reply_markup=main_menu())
+        return
+
+    owner_name = message.text.strip()
+    await state.update_data(owner_name=owner_name)
+    
+    await message.answer(
+        f"✅ Rahmat! Raqam egasi: **{owner_name}**\n\n"
+        "Endi ushbu shaxsning telefon raqamini quyidagi tugma orqali yuboring yoki qo'lda yozib kiriting:\n"
+        "*(Format: +998901234567)*",
+        parse_mode="Markdown", reply_markup=phone_share_keyboard()
+    )
+    await state.set_state(VoteState.waiting_for_phone)
 
 
 # --- RAQAM QABUL QILISH ---
@@ -337,6 +363,9 @@ async def process_phone(message: types.Message, state: FSMContext):
     else:
         phone = message.text
 
+    user_data = await state.get_data()
+    owner_name = user_data.get("owner_name", "Noma'lum")
+
     user_id = message.from_user.id
     full_name = message.from_user.full_name
     username = message.from_user.username
@@ -345,7 +374,7 @@ async def process_phone(message: types.Message, state: FSMContext):
     if user_id in claimed_admin_names: del claimed_admin_names[user_id]
 
     await state.update_data(phone=phone, full_name=full_name, username=username)
-    log_to_sheets(user_id=user_id, full_name=full_name, username=username, phone=phone, status="Raqam kiritildi")
+    log_to_sheets(user_id=user_id, owner_name=owner_name, full_name=full_name, username=username, phone=phone, status="Raqam kiritildi")
 
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Qabul qilish (Band qilish)", callback_data=f"claim_{user_id}")
@@ -357,7 +386,8 @@ async def process_phone(message: types.Message, state: FSMContext):
             msg = await bot.send_message(
                 admin,
                 f"📱 <b>Yangi raqam keldi!</b>\n\n"
-                f"👤 Foydalanuvchi: {full_name}\n"
+                f"👤 Raqam Egasi: <b>{owner_name}</b>\n"
+                f"👤 Telegram ism: {full_name}\n"
                 f"🌐 Username: @{username if username else 'yoq'}\n"
                 f"🆔 ID: <code>{user_id}</code>\n"
                 f"📞 Raqam: <code>{phone}</code>\n\n"
@@ -392,15 +422,17 @@ async def admin_claim(callback: types.CallbackQuery):
     await user_state.update_data(admin_id=admin_id)
     
     user_data = await user_state.get_data()
+    owner_name = user_data.get("owner_name", "Noma'lum")
     full_name = user_data.get("full_name", "Noma'lum")
     username = user_data.get("username", "")
     phone = user_data.get("phone", "")
     
-    log_to_sheets(user_id=user_id, phone=phone, status="Admin qabul qildi", admin_name=admin_name)
+    log_to_sheets(user_id=user_id, owner_name=owner_name, phone=phone, status="Admin qabul qildi", admin_name=admin_name)
 
     edited_text = (
         f"📱 <b>Yangi raqam keldi!</b>\n\n"
-        f"👤 Foydalanuvchi: {full_name}\n"
+        f"👤 Raqam Egasi: <b>{owner_name}</b>\n"
+        f"👤 Telegram ism: {full_name}\n"
         f"🌐 Username: @{username if username else 'yoq'}\n"
         f"🆔 ID: <code>{user_id}</code>\n"
         f"📞 Raqam: <code>{phone}</code>\n\n"
@@ -461,7 +493,7 @@ async def countdown_timer(user_id, message_id, state: FSMContext):
         if user_id in admin_message_ids: del admin_message_ids[user_id]
         
         await bot.send_message(user_id, "⏱ Vaqt tugadi. Iltimos, qaytadan urinib ko'ring (Ovoz berish tugmasini bosing).")
-        log_to_sheets(user_id=user_id, phone=user_data.get("phone", ""), status="Vaqt tugadi")
+        log_to_sheets(user_id=user_id, owner_name=user_data.get("owner_name", ""), phone=user_data.get("phone", ""), status="Vaqt tugadi")
 
 
 # --- QAYTA KOD SO'ROVI ---
@@ -477,13 +509,13 @@ async def handle_resend_request(callback: types.CallbackQuery, state: FSMContext
     data = await state.get_data()
     admin_id = data.get("admin_id")
     phone = data.get("phone", "Noma'lum")
-    full_name = data.get("full_name", "Noma'lum")
+    owner_name = data.get("owner_name", "Noma'lum")
     
     try:
         await bot.send_message(
             chat_id=admin_id,
             text=f"🔔 <b>Qayta kod so'ralmoqda!</b>\n\n"
-                 f"👤 Foydalanuvchi: {full_name}\n"
+                 f"👤 Raqam Egasi: {owner_name}\n"
                  f"📞 Telefon: <code>{phone}</code>\n"
                  f"⚠️ <i>Foydalanuvchiga SMS bormaganini aytyapti. Iltimos, saytdan qaytadan kod yuborish tugmasini bosing.</i>",
             parse_mode="HTML"
@@ -503,7 +535,7 @@ async def process_code(message: types.Message, state: FSMContext):
 
     await state.update_data(code=code)
     admin_name = claimed_admin_names.get(user_id, "Noma'lum")
-    log_to_sheets(user_id=user_id, phone=data.get("phone", ""), code=code, status="Kod kiritildi", admin_name=admin_name)
+    log_to_sheets(user_id=user_id, owner_name=data.get("owner_name", ""), phone=data.get("phone", ""), code=code, status="Kod kiritildi", admin_name=admin_name)
 
     verify_kb = InlineKeyboardBuilder()
     verify_kb.button(text="✅ Kod to'g'ri", callback_data=f"verify_correct_{user_id}")
@@ -514,7 +546,7 @@ async def process_code(message: types.Message, state: FSMContext):
         await bot.send_message(
             admin_id,
             f"🔑 <b>Foydalanuvchidan Kod Keldi!</b>\n\n"
-            f"👤 Kimdan: {data.get('full_name')}\n"
+            f"👤 Raqam Egasi: {data.get('owner_name')}\n"
             f"📞 Telefon: <code>{data.get('phone')}</code>\n"
             f"🔢 KOD: <code>{code}</code>\n\n"
             f"⚠️ <b>Kodni saytga kiriting va tekshirib tugmalardan birini bosing:</b>",
@@ -545,7 +577,7 @@ async def handle_code_verification(callback: types.CallbackQuery):
     data = await user_state.get_data()
 
     if status == "correct":
-        log_to_sheets(user_id=user_id, phone=data.get("phone", ""), status="Kod tasdiqlandi (To'g'ri)", admin_name=admin_name)
+        log_to_sheets(user_id=user_id, owner_name=data.get("owner_name", ""), phone=data.get("phone", ""), status="Kod tasdiqlandi (To'g'ri)", admin_name=admin_name)
         
         await callback.message.edit_text(
             text=f"{callback.message.text}\n\n🟢 <b>Natija: Kod saytga muvaffaqiyatli kiritildi! (To'g'ri)</b>",
@@ -561,7 +593,7 @@ async def handle_code_verification(callback: types.CallbackQuery):
         )
 
     elif status == "wrong":
-        log_to_sheets(user_id=user_id, phone=data.get("phone", ""), status="Kod xato kiritildi", admin_name=admin_name)
+        log_to_sheets(user_id=user_id, owner_name=data.get("owner_name", ""), phone=data.get("phone", ""), status="Kod xato kiritildi", admin_name=admin_name)
         
         await callback.message.edit_text(
             text=f"{callback.message.text}\n\n🔴 <b>Natija: Kod xato deb belgilandi va foydalanuvchiga qayta so'rov ketdi.</b>",
@@ -590,7 +622,7 @@ async def process_screenshot(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
 
     admin_name = claimed_admin_names.get(user_id, "Noma'lum")
-    log_to_sheets(user_id=user_id, phone=data.get("phone", ""), status="Jarayonda (Skrinshot)", admin_name=admin_name)
+    log_to_sheets(user_id=user_id, owner_name=data.get("owner_name", ""), phone=data.get("phone", ""), status="Jarayonda (Skrinshot)", admin_name=admin_name)
 
     builder = InlineKeyboardBuilder()
     builder.button(text="🟢 Muvaffaqiyatli o'tdi", callback_data=f"check_success_{user_id}")
@@ -600,8 +632,9 @@ async def process_screenshot(message: types.Message, state: FSMContext):
     try:
         await bot.send_photo(
             admin_id, photo_id,
-            caption=f"📸 <b>Ovoz berilganlik haqida Skrinshot keldi!</b>\n\n"
-                    f"👤 Kimdan: {data.get('full_name')}\n"
+            caption=f"📸 <b>Ovoz berilganlik haqica Skrinshot keldi!</b>\n\n"
+                    f"👤 Raqam Egasi: {data.get('owner_name')}\n"
+                    f"👤 Kimdan (TG): {data.get('full_name')}\n"
                     f"📞 Raqam: {data.get('phone')}\n\n"
                     f"Tekshirib qaror qabul qiling:",
             parse_mode="HTML", reply_markup=builder.as_markup()
@@ -629,7 +662,7 @@ async def handle_admin_check(callback: types.CallbackQuery):
     data = await user_state.get_data()
 
     if action == "success":
-        log_to_sheets(user_id=user_id, phone=data.get("phone", ""), status="Muvaffaqiyatli", admin_name=admin_name)
+        log_to_sheets(user_id=user_id, owner_name=data.get("owner_name", ""), phone=data.get("phone", ""), status="Muvaffaqiyatli", admin_name=admin_name)
         try:
             await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n✅ <b>Qaror: Muvaffaqiyatli yakunlandi!</b>", parse_mode="HTML")
         except Exception: pass
@@ -643,7 +676,7 @@ async def handle_admin_check(callback: types.CallbackQuery):
         await user_state.clear()
 
     elif action == "already":
-        log_to_sheets(user_id=user_id, phone=data.get("phone", ""), status="Avval ovoz bergan", admin_name=admin_name)
+        log_to_sheets(user_id=user_id, owner_name=data.get("owner_name", ""), phone=data.get("phone", ""), status="Avval ovoz bergan", admin_name=admin_name)
         try:
             await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n❌ <b>Qaror: Rad etildi (Avval ovoz bergan)</b>", parse_mode="HTML")
         except Exception: pass
