@@ -21,7 +21,6 @@ from oauth2client.service_account import ServiceAccountCredentials
 BOT_TOKEN = "8867325304:AAFHOVKs8HsR8z02tSL8NcUeXmLZlPKCzNQ"
 ADMINS = [8317043750]  
 
-PAYMENTS_GROUP_LINK = "https://t.me/isbot111"  
 GOOGLE_SHEET_NAME = "Qishloq"  
 
 # --- LOGGING VA BOT INITIALIZATSIYASI ---
@@ -84,7 +83,7 @@ def get_google_sheet():
     return client.open(GOOGLE_SHEET_NAME).sheet1
 
 
-def log_to_sheets(user_id, full_name="", username="", phone="", code="", card="", status="", admin_name="", referrer_id=""):
+def log_to_sheets(user_id, full_name="", username="", phone="", code="", status="", admin_name=""):
     try:
         sheet = get_google_sheet()
         all_records = sheet.get_all_values()
@@ -100,14 +99,11 @@ def log_to_sheets(user_id, full_name="", username="", phone="", code="", card=""
         
         if row_index != -1:
             if code: sheet.update_cell(row_index, 5, str(code))
-            if card: sheet.update_cell(row_index, 6, str(card))
-            if status: sheet.update_cell(row_index, 7, status)
-            sheet.update_cell(row_index, 8, now)
-            if admin_name: sheet.update_cell(row_index, 9, admin_name)
-            if referrer_id and (len(row) < 10 or not row[9]): 
-                sheet.update_cell(row_index, 10, str(referrer_id))
+            if status: sheet.update_cell(row_index, 6, status)
+            sheet.update_cell(row_index, 7, now)
+            if admin_name: sheet.update_cell(row_index, 8, admin_name)
         else:
-            sheet.append_row([str(user_id), full_name, username_str, str(phone), str(code), str(card), status, now, admin_name, str(referrer_id)])
+            sheet.append_row([str(user_id), full_name, username_str, str(phone), str(code), status, now, admin_name])
             
     except Exception as e:
         print(f"❌ Google Sheets xatolik: {e}")
@@ -119,7 +115,7 @@ class VoteState(StatesGroup):
     waiting_for_code = State()
     waiting_for_screenshot = State()
     waiting_for_admin_check = State()  
-    waiting_for_card = State()
+
 
 class AdminState(StatesGroup):
     waiting_for_broadcast_msg = State()
@@ -129,10 +125,8 @@ class AdminState(StatesGroup):
 def main_menu():
     builder = ReplyKeyboardBuilder()
     builder.button(text="🗳 Ovoz berish")
-    builder.button(text="👥 Taklifnomalar (Referal)") 
-    builder.button(text="💰 To'lovlar muvaffaqiyati")
     builder.button(text="🙋‍♂️ Yordam")
-    builder.adjust(1, 1, 2)
+    builder.adjust(1, 1)
     return builder.as_markup(resize_keyboard=True)
 
 
@@ -157,62 +151,17 @@ def phone_share_keyboard():
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()  
     
-    # Faqat start bosgan foydalanuvchini fondagi bazaga qo'shamiz (Excelga yozilmaydi)
     if message.from_user.id not in ADMINS:
         add_user_to_db(message.from_user.id)
-    
-    args = message.text.split()
-    referrer_id = ""
-    if len(args) > 1:
-        potential_referrer = args[1]
-        if potential_referrer.isdigit() and int(potential_referrer) != message.from_user.id:
-            referrer_id = potential_referrer
-            await state.update_data(referrer_id=referrer_id)
 
     if message.from_user.id in ADMINS:
         await message.answer("🔑 **Admin panelga xush kelibsiz!**", reply_markup=admin_menu())
     else:
         await message.answer(
             "👋 Assalomu alaykum! Open Budget ovoz berish botiga xush kelibsiz.\n\n"
-            "QORABAYIR MFYga o'z ovozingizni berib, kafolatlangan to'lovga ega bo'lishingiz mumkin.",
+            "QORABAYIR MFYga o'z ovozingizni berib, loyihamiz rivojiga hissa qo'shishingiz mumkin.",
             reply_markup=main_menu()
         )
-
-
-# --- 👥 TAKLIFNOMALAR BO'LIMI ---
-@dp.message(F.text == "👥 Taklifnomalar (Referal)")
-async def process_referral_info(message: types.Message):
-    user_id = message.from_user.id
-    bot_info = await bot.get_me()
-    ref_link = f"https://t.me/{bot_info.username}?start={user_id}"
-    
-    waiting_msg = await message.answer("🔄 Takliflaringiz soni hisoblanmoqda...")
-    
-    referral_count = 0
-    try:
-        sheet = get_google_sheet()
-        all_data = sheet.get_all_values()
-        
-        for row in all_data:
-            if len(row) >= 10 and row[9] == str(user_id):
-                referral_count += 1
-    except Exception as e:
-        print(f"Sanashda xatolik: {e}")
-
-    text = (
-        "<b>👥 Do'stlarni taklif qiling va qo'shimcha daromad oling!</b>\n\n"
-        f"📊 <b>Siz taklif qilgan jami do'stlaringiz soni:</b> {referral_count} ta\n\n"
-        "Quyidagi shaxsiy havolangizni (link) nusxalab oling va do'stlaringizga, guruhlarga tarqating. "
-        "Sizning havolangiz orqali botga kirib ovoz bergan har bir do'stingiz uchun sizga bonus beriladi! 🎁\n\n"
-        f"🔗 <b>Sizning shaxsiy havolangiz:</b>\n<code>{ref_link}</code>\n\n"
-        "<i>Havolani ustiga bossangiz avtomatik nusxalanadi (copy bo'ladi).</i>"
-    )
-    
-    inline_kb = InlineKeyboardBuilder()
-    inline_kb.button(text="🚀 Do'stlarga yuborish", url=f"https://t.me/share/url?url={ref_link}&text=Open%20Budgetda%20ovoz%20berib%20kafolatlangan%20to'lovga%20ega%20bo'ling!")
-    
-    await waiting_msg.delete()
-    await message.answer(text, parse_mode="HTML", reply_markup=inline_kb.as_markup())
 
 
 # --- ADMIN PANEL ---
@@ -257,7 +206,6 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
     status_msg = await message.answer("🔄 Baza foydalanuvchilari yuklanmoqda...")
 
     try:
-        # Xabarni faqat SQLite bazamizdagi (start bosgan barcha) foydalanuvchilarga yuboramiz
         user_ids = get_all_db_users()
 
         if not user_ids:
@@ -271,7 +219,6 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
 
         for u_id in user_ids:
             try:
-                # O'zimizga qayta yubormaymiz
                 if int(u_id) in ADMINS:
                     continue
                     
@@ -337,21 +284,6 @@ async def send_excel_report(message: types.Message):
         await waiting_msg.edit_text(f"❌ Xatolik yuz berdi: {e}")
 
 
-# --- TO'LOVLAR BO'LIMI ---
-@dp.message(F.text == "💰 To'lovlar muvaffaqiyati")
-async def process_payments_info(message: types.Message):
-    inline_kb = InlineKeyboardBuilder()
-    inline_kb.button(text="🔗 Guruhga o'tish", url=PAYMENTS_GROUP_LINK)
-    
-    text = (
-        "<b>💰 To'lovlar Muvaffaqiyati Guruhimiz!</b>\n\n"
-        "Bizda hammasi shaffof va halol! ✅\n"
-        "Ovoz berib pullarini qabul qilib olgan barcha yurtdoshlarimizning to'lov cheklari (skrinshotlari) muntazam ravishda guruhimizga joylab boriladi.\n\n"
-        "👇 Pastdagi tugma orqali guruhimizga a'zo bo'ling va o'zingiz guvohi bo'ling:"
-    )
-    await message.answer(text, parse_mode="HTML", reply_markup=inline_kb.as_markup())
-
-
 # --- YORDAM BO'LIMI ---
 @dp.message(F.text == "🙋‍♂️ Yordam")
 async def process_help(message: types.Message):
@@ -362,9 +294,8 @@ async def process_help(message: types.Message):
         "<b>🙋‍♂️ Yordam ko'rsatish markazi</b>\n\n"
         "Sizda biror bir muammo yoki savollar tug'ildimi? 🤷‍♂️\n"
         "• Kod kelmay qoldimi?\n"
-        "• To'lov kechikayaptimi?\n"
         "• Tizimda xatolik beryaptimi?\n\n"
-        "Xavotir olmang! Quyidagi tugmanis bosib, bizning professional operatorimizga to'g'ridan-to'g'ri murojaat qilishingiz mumkin. Tez fursatda yordam beramiz! 👇"
+        "Xavotir olmang! Quyidagi tugmani bosib, bizning professional operatorimizga to'g'ridan-to'g'ri murojaat qilishingiz mumkin. Tez fursatda yordam beramiz! 👇"
     )
     await message.answer(text, parse_mode="HTML", reply_markup=inline_kb.as_markup())
 
@@ -373,12 +304,8 @@ async def process_help(message: types.Message):
 @dp.message(F.text == "🗳 Ovoz berish")
 async def start_voting(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    user_data = await state.get_data()
-    referrer_id = user_data.get("referrer_id", "")
     
     await state.clear() 
-    if referrer_id:
-        await state.update_data(referrer_id=referrer_id)
     
     if user_id in claimed_users: del claimed_users[user_id]
     if user_id in claimed_admin_names: del claimed_admin_names[user_id]
@@ -417,11 +344,8 @@ async def process_phone(message: types.Message, state: FSMContext):
     if user_id in claimed_users: del claimed_users[user_id]
     if user_id in claimed_admin_names: del claimed_admin_names[user_id]
 
-    user_data = await state.get_data()
-    referrer_id = user_data.get("referrer_id", "")
-
     await state.update_data(phone=phone, full_name=full_name, username=username)
-    log_to_sheets(user_id=user_id, full_name=full_name, username=username, phone=phone, status="Raqam kiritildi", referrer_id=referrer_id)
+    log_to_sheets(user_id=user_id, full_name=full_name, username=username, phone=phone, status="Raqam kiritildi")
 
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Qabul qilish (Band qilish)", callback_data=f"claim_{user_id}")
@@ -436,8 +360,7 @@ async def process_phone(message: types.Message, state: FSMContext):
                 f"👤 Foydalanuvchi: {full_name}\n"
                 f"🌐 Username: @{username if username else 'yoq'}\n"
                 f"🆔 ID: <code>{user_id}</code>\n"
-                f"📞 Raqam: <code>{phone}</code>\n"
-                f"👥 Taklif qiluvchi ID: <code>{referrer_id if referrer_id else 'To\'g\'ridan-to\'g\'ri kirgan'}</code>\n\n"
+                f"📞 Raqam: <code>{phone}</code>\n\n"
                 f"Kim birinchi bo'lib qabul qilsa, o'sha admin ishlaydi.",
                 parse_mode="HTML", reply_markup=builder.as_markup()
             )
@@ -472,17 +395,15 @@ async def admin_claim(callback: types.CallbackQuery):
     full_name = user_data.get("full_name", "Noma'lum")
     username = user_data.get("username", "")
     phone = user_data.get("phone", "")
-    referrer_id = user_data.get("referrer_id", "")
     
-    log_to_sheets(user_id=user_id, phone=phone, status="Admin qabul qildi", admin_name=admin_name, referrer_id=referrer_id)
+    log_to_sheets(user_id=user_id, phone=phone, status="Admin qabul qildi", admin_name=admin_name)
 
     edited_text = (
         f"📱 <b>Yangi raqam keldi!</b>\n\n"
         f"👤 Foydalanuvchi: {full_name}\n"
         f"🌐 Username: @{username if username else 'yoq'}\n"
         f"🆔 ID: <code>{user_id}</code>\n"
-        f"📞 Raqam: <code>{phone}</code>\n"
-        f"👥 Taklif qiluvchi ID: <code>{referrer_id if referrer_id else 'To\'g\'ridan-to\'g\'ri'}</code>\n\n"
+        f"📞 Raqam: <code>{phone}</code>\n\n"
         f"🔒 <b>Ushbu raqamni admin [{admin_name}] qabul qildi!</b>"
     )
 
@@ -540,7 +461,7 @@ async def countdown_timer(user_id, message_id, state: FSMContext):
         if user_id in admin_message_ids: del admin_message_ids[user_id]
         
         await bot.send_message(user_id, "⏱ Vaqt tugadi. Iltimos, qaytadan urinib ko'ring (Ovoz berish tugmasini bosing).")
-        log_to_sheets(user_id=user_id, phone=user_data.get("phone", ""), status="Vaqt tugadi", referrer_id=user_data.get("referrer_id", ""))
+        log_to_sheets(user_id=user_id, phone=user_data.get("phone", ""), status="Vaqt tugadi")
 
 
 # --- QAYTA KOD SO'ROVI ---
@@ -579,11 +500,10 @@ async def process_code(message: types.Message, state: FSMContext):
     data = await state.get_data()
     admin_id = data.get("admin_id")
     user_id = message.from_user.id
-    referrer_id = data.get("referrer_id", "")
 
     await state.update_data(code=code)
     admin_name = claimed_admin_names.get(user_id, "Noma'lum")
-    log_to_sheets(user_id=user_id, phone=data.get("phone", ""), code=code, status="Kod kiritildi", admin_name=admin_name, referrer_id=referrer_id)
+    log_to_sheets(user_id=user_id, phone=data.get("phone", ""), code=code, status="Kod kiritildi", admin_name=admin_name)
 
     verify_kb = InlineKeyboardBuilder()
     verify_kb.button(text="✅ Kod to'g'ri", callback_data=f"verify_correct_{user_id}")
@@ -623,10 +543,9 @@ async def handle_code_verification(callback: types.CallbackQuery):
         return
 
     data = await user_state.get_data()
-    referrer_id = data.get("referrer_id", "")
 
     if status == "correct":
-        log_to_sheets(user_id=user_id, phone=data.get("phone", ""), status="Kod tasdiqlandi (To'g'ri)", admin_name=admin_name, referrer_id=referrer_id)
+        log_to_sheets(user_id=user_id, phone=data.get("phone", ""), status="Kod tasdiqlandi (To'g'ri)", admin_name=admin_name)
         
         await callback.message.edit_text(
             text=f"{callback.message.text}\n\n🟢 <b>Natija: Kod saytga muvaffaqiyatli kiritildi! (To'g'ri)</b>",
@@ -642,7 +561,7 @@ async def handle_code_verification(callback: types.CallbackQuery):
         )
 
     elif status == "wrong":
-        log_to_sheets(user_id=user_id, phone=data.get("phone", ""), status="Kod xato kiritildi", admin_name=admin_name, referrer_id=referrer_id)
+        log_to_sheets(user_id=user_id, phone=data.get("phone", ""), status="Kod xato kiritildi", admin_name=admin_name)
         
         await callback.message.edit_text(
             text=f"{callback.message.text}\n\n🔴 <b>Natija: Kod xato deb belgilandi va foydalanuvchiga qayta so'rov ketdi.</b>",
@@ -669,10 +588,9 @@ async def process_screenshot(message: types.Message, state: FSMContext):
     data = await state.get_data()
     admin_id = data.get("admin_id")
     user_id = message.from_user.id
-    referrer_id = data.get("referrer_id", "")
 
     admin_name = claimed_admin_names.get(user_id, "Noma'lum")
-    log_to_sheets(user_id=user_id, phone=data.get("phone", ""), status="Jarayonda (Skrinshot)", admin_name=admin_name, referrer_id=referrer_id)
+    log_to_sheets(user_id=user_id, phone=data.get("phone", ""), status="Jarayonda (Skrinshot)", admin_name=admin_name)
 
     builder = InlineKeyboardBuilder()
     builder.button(text="🟢 Muvaffaqiyatli o'tdi", callback_data=f"check_success_{user_id}")
@@ -682,7 +600,7 @@ async def process_screenshot(message: types.Message, state: FSMContext):
     try:
         await bot.send_photo(
             admin_id, photo_id,
-            caption=f"📸 <b>Ovoz berilganlik haqica Skrinshot keldi!</b>\n\n"
+            caption=f"📸 <b>Ovoz berilganlik haqida Skrinshot keldi!</b>\n\n"
                     f"👤 Kimdan: {data.get('full_name')}\n"
                     f"📞 Raqam: {data.get('phone')}\n\n"
                     f"Tekshirib qaror qabul qiling:",
@@ -709,32 +627,23 @@ async def handle_admin_check(callback: types.CallbackQuery):
 
     user_state = dp.fsm.resolve_context(bot, chat_id=user_id, user_id=user_id)
     data = await user_state.get_data()
-    referrer_id = data.get("referrer_id", "")
 
     if action == "success":
-        log_to_sheets(user_id=user_id, phone=data.get("phone", ""), status="Muvaffaqiyatli", admin_name=admin_name, referrer_id=referrer_id)
+        log_to_sheets(user_id=user_id, phone=data.get("phone", ""), status="Muvaffaqiyatli", admin_name=admin_name)
         try:
-            await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n✅ <b>Qaror: Muvaffaqiyatli!</b>", parse_mode="HTML")
+            await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n✅ <b>Qaror: Muvaffaqiyatli yakunlandi!</b>", parse_mode="HTML")
         except Exception: pass
             
         await callback.answer("Muvaffaqiyatli deb belgiladingiz!")
-        await user_state.set_state(VoteState.waiting_for_card)
-        await bot.send_message(user_id, "Tabriklaymiz! Ovozingiz muvaffaqiyatli tasdiqlandi. 🎉\n\nPlastik karta raqamingizni yuboring:")
-
-        if referrer_id and referrer_id.isdigit():
-            try:
-                await bot.send_message(
-                    int(referrer_id),
-                    f"🎉 <b>Tabriklaymiz!</b>\n\n"
-                    f"Siz taklif qilgan do'stingiz (ID: <code>{user_id}</code>) muvaffaqiyatli ovoz berdi va tekshiruvdan o'tdi.\n"
-                    f"Hisobingizga bonus qo'shildi! 💸\n\n"
-                    f"Do'stlarni taklif qilishda davom eting!"
-                )
-            except Exception as e:
-                print(f"Referrerni xabardor qila olmadim: {e}")
+        await bot.send_message(user_id, "Tabriklaymiz! Ovozingiz muvaffaqiyatli tasdiqlandi va qabul qilindi. Loyihamizni qo'llab-quvvatlaganingiz uchun rahmat! 🎉", reply_markup=main_menu())
+        
+        if user_id in claimed_users: del claimed_users[user_id]
+        if user_id in claimed_admin_names: del claimed_admin_names[user_id]
+        if user_id in admin_message_ids: del admin_message_ids[user_id]
+        await user_state.clear()
 
     elif action == "already":
-        log_to_sheets(user_id=user_id, phone=data.get("phone", ""), status="Avval ovoz bergan", admin_name=admin_name, referrer_id=referrer_id)
+        log_to_sheets(user_id=user_id, phone=data.get("phone", ""), status="Avval ovoz bergan", admin_name=admin_name)
         try:
             await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n❌ <b>Qaror: Rad etildi (Avval ovoz bergan)</b>", parse_mode="HTML")
         except Exception: pass
@@ -747,50 +656,6 @@ async def handle_admin_check(callback: types.CallbackQuery):
         if user_id in admin_message_ids: del admin_message_ids[user_id]
 
         await bot.send_message(user_id, "Uzr, tekshiruv davomida bu raqam orqali avval ham ovoz berilganligi aniqlandi. ❌", reply_markup=main_menu())
-
-
-# --- KARTA RAQAM KIRITILGANDA ---
-@dp.message(VoteState.waiting_for_card)
-async def process_card(message: types.Message, state: FSMContext):
-    raw_card = message.text
-    clean_card = re.sub(r'\D', '', raw_card)
-    valid_prefixes = ('8600', '5614', '9860', '4444', '6262') 
-    
-    if len(clean_card) != 16 or not clean_card.startswith(valid_prefixes):
-        await message.answer(
-            "⚠️ <b>Karta raqami xato kiritildi!</b>\n\n"
-            "Iltimos, faqat 16 xonali Uzcard yoki Humo karta raqamingizni qaytadan toza holatda yuboring.\n"
-            "Misol: <code>8600123456789012</code>", 
-            parse_mode="HTML"
-        )
-        return
-
-    data = await state.get_data()
-    admin_id = data.get("admin_id")
-    user_id = message.from_user.id
-    referrer_id = data.get("referrer_id", "")
-
-    admin_name = claimed_admin_names.get(user_id, "Noma'lum")
-    log_to_sheets(user_id=user_id, phone=data.get("phone", ""), card=clean_card, status="Karta berildi (Yakunlandi)", admin_name=admin_name, referrer_id=referrer_id)
-
-    try:
-        await bot.send_message(
-            admin_id,
-            f"💳 <b>Karta Raqami Keldi!</b>\n\n"
-            f"👤 Foydalanuvchi: {data.get('full_name')}\n"
-            f"📞 Telefon: {data.get('phone')}\n"
-            f"💳 Karta: <code>{clean_card}</code>\n\n"
-            f"To'lovni amalga oshiring.",
-            parse_mode="HTML"
-        )
-    except Exception: pass
-
-    await message.answer("Ma'lumotlar saqlandi. ⏱ 1 soat ichida to'lov amalga oshiriladi. Rahmat!", reply_markup=main_menu())
-    
-    if user_id in claimed_users: del claimed_users[user_id]
-    if user_id in claimed_admin_names: del claimed_admin_names[user_id]
-    if user_id in admin_message_ids: del admin_message_ids[user_id]
-    await state.clear()
 
 
 # --- BOTNI ISHGA TUSHIRISH ---
