@@ -16,7 +16,7 @@ ADMIN_IDS = [8317043750]  # Siz taqdim etgan Admin ID
 
 # Server (Railway/Render) uchun muhit o'zgaruvchisidan Google Sheet kalitini olish
 # Agar topilmasa, pastdagi standart ID ishlatiladi (o'z jadvallaringiz ID sini yozib qo'ying)
-GOOGLE_SHEET_KEY = os.getenv("GOOGLE_SHEET_KEY", "YOUR_GOOGLE_SHEET_ID_HERE")
+GOOGLE_SHEET_KEY = os.getenv("GOOGLE_SHEET_KEY", "https://docs.google.com/spreadsheets/d/1FAA7ejE4b1s7gxHudVTC1eS62tZotgnAyvFSBkpnyJc/edit?gid=0#gid=0")
 
 # Loggingni sozlash
 logging.basicConfig(level=logging.INFO)
