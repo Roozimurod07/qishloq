@@ -24,7 +24,7 @@ logging.basicConfig(level=logging.INFO)
 # Google Sheets ulanishi
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 try:
-    creds = ServiceAccountCredentials.from_json_keyfile_name("google_creds.json", scope)
+    creds = ServiceAccountCredentials.from_json_keyfile_name("open.json", scope)
     client = gspread.authorize(creds)
     sheet = client.open_by_key(GOOGLE_SHEET_KEY).sheet1
 except Exception as e:
