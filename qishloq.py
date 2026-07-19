@@ -175,6 +175,7 @@ def log_to_sheets(user_id, full_name="", username="", phone="", code="", status=
 
 # --- FSM STATES ---
 class VoteState(StatesGroup):
+    waiting_for_name = State()       # ✨ YANGI: Ism-familiya kutish holati
     waiting_for_phone = State()
     waiting_for_code = State()
     waiting_for_screenshot = State()
@@ -214,6 +215,11 @@ def phone_share_keyboard():
     builder.button(text="📱 Telefon raqamni yuborish", request_contact=True)
     builder.button(text="❌ Bekor qilish")
     builder.adjust(1)
+    return builder.as_markup(resize_keyboard=True)
+
+def cancel_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="❌ Bekor qilish")
     return builder.as_markup(resize_keyboard=True)
 
 # --- BUYRUQLAR INTERFEYSI ---
@@ -337,7 +343,7 @@ async def process_help(message: types.Message):
 
 
 # =====================================================================
-# 🔥 OVOZ BERISH JARAYONI 🔥
+# 🔥 YANGILANGAN OVOZ BERISH JARAYONI 🔥
 # =====================================================================
 
 @dp.message(F.text == "🗳 Ovoz berish")
@@ -346,7 +352,25 @@ async def start_voting(message: types.Message, state: FSMContext):
         await message.answer(f"🌙 Bot hozirda yopiq! Ish vaqti: {get_db_setting('start_time', '07:00')} - {get_db_setting('end_time', '23:00')}")
         return
     await state.clear()
-    await message.answer("Format: +998901234567. Telefon raqamingizni kiriting:", reply_markup=phone_share_keyboard())
+    
+    # 1-qadam: Birinchi bo'lib Ism va Familiyani so'rash
+    await message.answer("👤 Iltimos, ism va familiyangizni kiriting:", reply_markup=cancel_keyboard())
+    await state.set_state(VoteState.waiting_for_name)
+
+@dp.message(F.text == "❌ Bekor qilish", VoteState.waiting_for_name)
+async def cancel_at_name(message: types.Message, state: FSMContext):
+    await state.clear(); await message.answer("Bekor qilindi.", reply_markup=main_menu())
+
+@dp.message(VoteState.waiting_for_name)
+async def process_name(message: types.Message, state: FSMContext):
+    user_name = message.text.strip()
+    if len(user_name) < 3 or user_name == "❌ Bekor qilish":
+        await message.answer("⚠️ Iltimos, ism va familiyangizni to'liq kiriting:"); return
+
+    await state.update_data(full_name=user_name)
+    
+    # 2-qadam: Endi telefon raqamini so'rash
+    await message.answer("📱 Rahmat! Endi telefon raqamingizni yuboring yoki kiriting:", reply_markup=phone_share_keyboard())
     await state.set_state(VoteState.waiting_for_phone)
 
 @dp.message(F.text == "❌ Bekor qilish", VoteState.waiting_for_phone)
@@ -373,8 +397,12 @@ async def process_phone(message: types.Message, state: FSMContext):
                     await state.clear(); return
     except Exception as e: print(f"Sheets tekshirishda xato: {e}")
 
-    user_id, full_name, username = message.from_user.id, message.from_user.full_name, message.from_user.username
-    await state.update_data(phone=phone, full_name=full_name, username=username)
+    user_id, username = message.from_user.id, message.from_user.username
+    data = await state.get_data()
+    full_name = data.get("full_name")  # Foydalanuvchi o'zi kiritgan ism-familiya
+
+    await state.update_data(phone=phone, username=username)
+    # Excelga foydalanuvchi kiritgan haqiqiy ism yoziladi
     log_to_sheets(user_id=user_id, full_name=full_name, username=username, phone=phone, status="Raqam kiritildi")
 
     builder = InlineKeyboardBuilder().button(text="✅ Qabul qilish (Band qilish)", callback_data=f"claim_{user_id}")
@@ -462,8 +490,14 @@ async def handle_admin_check(callback: types.CallbackQuery):
         increment_admin_stat(callback.from_user.id, 'success')
         await callback.message.edit_caption(caption="✅ Tasdiqlandi!")
         
-        # MFY nomidan rahmatnoma yuborish qismi (Siz so'ragan qism)
-        await bot.send_message(chat_id=user_id, text="Ovoz berganingiz uchun rahmat QORABAYIR MFY nomidan", reply_markup=main_menu())
+        # ✨ CHIROYLI RAHMATNOMA MATNI ✨
+        beautiful_thanks_text = (
+            "🎉 <b>Tabriklaymiz! Sizning ovozingiz muvaffaqiyatli tasdiqlandi.</b>\n\n"
+            "✨ Tashabbusimizni qo'llab-quvvatlaganingiz hamda mahallamiz "
+            "rivojiga befarq bo'lmaganingiz uchun sizga samimiy minnatdorchilik bildiramiz.\n\n"
+            "🤝 <b>Ovoz berganingiz uchun rahmat QORABAYIR MFY nomidan!</b>"
+        )
+        await bot.send_message(chat_id=user_id, text=beautiful_thanks_text, parse_mode="HTML", reply_markup=main_menu())
     else:
         log_to_sheets(user_id=user_id, phone=data.get("phone"), status="Avval ovoz bergan", admin_name=callback.from_user.full_name)
         increment_admin_stat(callback.from_user.id, 'already')
