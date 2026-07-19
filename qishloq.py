@@ -161,12 +161,12 @@ def main_menu():
 def admin_menu(user_id):
     builder = ReplyKeyboardBuilder()
     builder.button(text="📊 Jonli Statistika") 
-    builder.button(text="📈 Adminlar statistikasi") # 1-funksiya tugmasi
+    builder.button(text="📈 Adminlar statistikasi") 
     
     if user_id in SUPER_ADMINS:
         builder.button(text="📊 Hisobot (.xlsx)")
         builder.button(text="📢 Xabar yuborish (Mailing)") 
-        builder.button(text="🕒 Ish vaqtini sozlash") # 3-funksiya tugmasi
+        builder.button(text="🕒 Ish vaqtini sozlash") 
         
     builder.button(text="⬅️ Bosh menyu")
     builder.adjust(1, 1, 2, 1) if user_id in SUPER_ADMINS else builder.adjust(1, 1, 1)
@@ -308,7 +308,6 @@ async def show_admin_performance(message: types.Message):
             return
 
         report_text = "📈 **Adminlar va Operatorlar reytingi:**\n\n"
-        # Muvaffaqiyatli arizalar soni bo'yicha saralash
         sorted_admins = sorted(admin_data.items(), key=lambda item: item[1]['success'], reverse=True)
         
         for idx, (name, stats) in enumerate(sorted_admins, 1):
@@ -508,7 +507,6 @@ async def process_help(message: types.Message):
 async def start_voting(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     
-    # [FUNKSIYA 3]: Dinamik sozlangan vaqtni tekshiramiz
     start_hour, end_hour = get_working_hours()
     current_hour = datetime.now().hour
     
