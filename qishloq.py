@@ -20,10 +20,10 @@ import pandas as pd
 from oauth2client.service_account import ServiceAccountCredentials
 
 # --- SOZLAMALAR ---
-BOT_TOKEN = "8482178284:AAGzq9lzZEV6JlOkBA3_TvDcX37NQA_uB_M"
+BOT_TOKEN = "8867325304:AAFHOVKs8HsR8z02tSL8NcUeXmLZlPKCzNQ"
 FOUNDER_ID = 8317043750  # Bot asoschisi
 
-GOOGLE_SHEET_NAME = "Openbudjet"  
+GOOGLE_SHEET_NAME = "Qorabayir"  
 UZ_TZ = pytz.timezone('Asia/Tashkent')
 
 # --- LOGGING VA BOT INITIALIZATSIYASI ---
