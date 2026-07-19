@@ -280,7 +280,7 @@ async def show_live_stats(message: types.Message):
     total, success, wrong_code, already_voted = get_sqlite_stats()
     
     web_app_builder = InlineKeyboardBuilder()
-    web_app_builder.button(text="🖥 Operator Web Paneli (Tezkor)", web_app=types.WebAppInfo(url="https://openbudget.uz"))
+    web_app_builder.button(text="🖥 Operator Web Paneli (Tezkor)", web_app=types.WebAppInfo(url="https://openbudget.uz/boards/initiatives/initiative/55/272a7c73-d46f-4358-908d-1eab109639c8"))
     
     stats_text = (
         "📊 **Real vaqtdagi Jonli Statistika (SQLite):**\n\n"
