@@ -260,7 +260,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     if user_id in get_all_admins():
         await message.answer("🔑 <b>Admin panelga xush kelibsiz!</b>", reply_markup=admin_menu(user_id), parse_mode="HTML")
     else:
-        await message.answer("👋 Assalomu alaykum! Open Budget ovoz berish botiga xush kelibsiz.\nQORABAYIR MFYga o'z ovozingizni berib, kafolatlangan mukofotga ega bo'ling.", reply_markup=main_menu())
+        await message.answer("👋 Assalomu alaykum! Open Budget ovoz berish botiga xush kelibsiz.\nQORABAYIR MFYga o'z ovozingizni bering ILTIMOS.", reply_markup=main_menu())
 
 @dp.message(F.text == "⬅️ Bosh menyu")
 async def back_to_main(message: types.Message, state: FSMContext):
