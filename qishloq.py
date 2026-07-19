@@ -175,7 +175,7 @@ def log_to_sheets(user_id, full_name="", username="", phone="", code="", status=
 
 # --- FSM STATES ---
 class VoteState(StatesGroup):
-    waiting_for_name = State()       # ✨ YANGI: Ism-familiya kutish holati
+    waiting_for_name = State()       
     waiting_for_phone = State()
     waiting_for_code = State()
     waiting_for_screenshot = State()
@@ -227,7 +227,9 @@ def cancel_keyboard():
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()  
     user_id = message.from_user.id
-    if user_id not in get_all_admins(): add_user_to_db(user_id)
+    
+    # ✨ TUZATILDI: Start bosgan har qanday foydalanuvchi bazaga qo'shiladi (Admin bo'lsa ham)
+    add_user_to_db(user_id)
 
     if user_id in get_all_admins():
         await message.answer("🔑 <b>Admin panelga xush kelibsiz!</b>", reply_markup=admin_menu(user_id), parse_mode="HTML")
@@ -309,20 +311,33 @@ async def del_admin_finish(message: types.Message, state: FSMContext):
 @dp.message(F.text == "📢 Xabar yuborish (Mailing)")
 async def start_broadcast(message: types.Message, state: FSMContext):
     if message.from_user.id in SUPER_ADMINS:
-        await message.answer("Xabarni kiriting:"); await state.set_state(AdminState.waiting_for_broadcast_msg)
+        await message.answer("Tarqatiladigan xabarni kiriting:"); await state.set_state(AdminState.waiting_for_broadcast_msg)
 
 @dp.message(AdminState.waiting_for_broadcast_msg)
 async def process_broadcast_message(message: types.Message, state: FSMContext):
     await state.clear()
     s_msg = await message.answer("📢 Tarqatish boshlandi...")
     sc, fc = 0, 0
-    for u_id in get_all_db_users():
+    all_users = get_google_sheet().get_all_values()[1:]
+    
+    # SQLite va Google Sheets dagi barcha unikal ID larni yig'amiz
+    target_users = set()
+    for row in all_users:
+        if row and row[0].isdigit():
+            target_users.add(int(row[0]))
+            
+    for db_uid in get_all_db_users():
+        target_users.add(int(db_uid))
+        
+    for u_id in target_users:
         try:
-            if int(u_id) in get_all_admins(): continue
-            await bot.send_message(chat_id=int(u_id), text=message.text)
+            # ✨ TUZATILDI: Adminlarni o'tkazib yuboradigan 'continue' olib tashlandi.
+            await bot.send_message(chat_id=u_id, text=message.text)
             sc += 1; await asyncio.sleep(0.05)
-        except Exception: fc += 1
-    await s_msg.edit_text(f"✅ Tugadi.\n🟢 Yetkazildi: {sc}\n🔴 Yetkazilmadi: {fc}")
+        except Exception: 
+            fc += 1
+            
+    await s_msg.edit_text(f"✅ Tugadi.\n🟢 Yetkazildi (Adminlar va foydalanuvchilar): {sc}\n🔴 Yetkazilmadi: {fc}")
 
 @dp.message(F.text == "📥 Excel Hisobot (.xlsx)")
 async def send_excel_report(message: types.Message):
@@ -343,7 +358,7 @@ async def process_help(message: types.Message):
 
 
 # =====================================================================
-# 🔥 YANGILANGAN OVOZ BERISH JARAYONI 🔥
+# 🔥 OVOZ BERISH JARAYONI 🔥
 # =====================================================================
 
 @dp.message(F.text == "🗳 Ovoz berish")
@@ -352,8 +367,6 @@ async def start_voting(message: types.Message, state: FSMContext):
         await message.answer(f"🌙 Bot hozirda yopiq! Ish vaqti: {get_db_setting('start_time', '07:00')} - {get_db_setting('end_time', '23:00')}")
         return
     await state.clear()
-    
-    # 1-qadam: Birinchi bo'lib Ism va Familiyani so'rash
     await message.answer("👤 Iltimos, ism va familiyangizni kiriting:", reply_markup=cancel_keyboard())
     await state.set_state(VoteState.waiting_for_name)
 
@@ -368,8 +381,6 @@ async def process_name(message: types.Message, state: FSMContext):
         await message.answer("⚠️ Iltimos, ism va familiyangizni to'liq kiriting:"); return
 
     await state.update_data(full_name=user_name)
-    
-    # 2-qadam: Endi telefon raqamini so'rash
     await message.answer("📱 Rahmat! Endi telefon raqamingizni yuboring yoki kiriting:", reply_markup=phone_share_keyboard())
     await state.set_state(VoteState.waiting_for_phone)
 
@@ -399,10 +410,9 @@ async def process_phone(message: types.Message, state: FSMContext):
 
     user_id, username = message.from_user.id, message.from_user.username
     data = await state.get_data()
-    full_name = data.get("full_name")  # Foydalanuvchi o'zi kiritgan ism-familiya
+    full_name = data.get("full_name")  
 
     await state.update_data(phone=phone, username=username)
-    # Excelga foydalanuvchi kiritgan haqiqiy ism yoziladi
     log_to_sheets(user_id=user_id, full_name=full_name, username=username, phone=phone, status="Raqam kiritildi")
 
     builder = InlineKeyboardBuilder().button(text="✅ Qabul qilish (Band qilish)", callback_data=f"claim_{user_id}")
@@ -490,7 +500,6 @@ async def handle_admin_check(callback: types.CallbackQuery):
         increment_admin_stat(callback.from_user.id, 'success')
         await callback.message.edit_caption(caption="✅ Tasdiqlandi!")
         
-        # ✨ CHIROYLI RAHMATNOMA MATNI ✨
         beautiful_thanks_text = (
             "🎉 <b>Tabriklaymiz! Sizning ovozingiz muvaffaqiyatli tasdiqlandi.</b>\n\n"
             "✨ Tashabbusimizni qo'llab-quvvatlaganingiz hamda mahallamiz "
