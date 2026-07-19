@@ -41,7 +41,6 @@ def init_db():
     cursor.execute("CREATE TABLE IF NOT EXISTS extra_admins (admin_id INTEGER PRIMARY KEY)")
     cursor.execute("CREATE TABLE IF NOT EXISTS super_admins (admin_id INTEGER PRIMARY KEY)")
     cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
-    # Admin band qilish tizimini xotiradan bazaga o'tkazamiz (Conflict bo'lganda ham o'chib ketmaydi)
     cursor.execute("CREATE TABLE IF NOT EXISTS claims (user_id INTEGER PRIMARY KEY, admin_id INTEGER, admin_name TEXT)")
     
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('start_time', '07:00')")
@@ -116,7 +115,6 @@ def remove_extra_admin(admin_id):
     conn.commit(); conn.close()
     return True
 
-# --- CLAIMS MANAGEMENT (DB) ---
 def get_claim(user_id):
     conn = sqlite3.connect("mailing_users.db")
     cursor = conn.cursor()
@@ -209,17 +207,20 @@ def get_google_sheet():
 def log_to_sheets(user_id, full_name="", username="", phone="", code="", status="", admin_name=""):
     try:
         sheet = get_google_sheet()
+        # Ustunlarni A dan I gacha qat'iy cheklash uchun faqat dastlabki 9 ta ustun ma'lumotlarini olamiz
         all_records = sheet.get_all_values()
         now = datetime.now(UZ_TZ).strftime("%Y-%m-%d %H:%M:%S")
         username_str = f"@{username}" if username else "Mavjud emas"
         
         row_index = -1
+        # Avval A (Telegram ID) va D (Telefon) ustunlari orqali foydalanuvchini qidiramiz
         for idx, row in enumerate(all_records):
             if len(row) >= 4 and row[0] == str(user_id) and row[3] == str(phone):
                 row_index = idx + 1
                 break
         
         if row_index != -1:
+            # Agar foydalanuvchi topilsa, o'ngga surilmasligi uchun cell_list shaklida faqat kerakli kataklarni yangilaymiz
             if full_name: sheet.update_cell(row_index, 2, str(full_name))
             if username_str: sheet.update_cell(row_index, 3, username_str)
             if code: sheet.update_cell(row_index, 5, str(code))
@@ -227,18 +228,30 @@ def log_to_sheets(user_id, full_name="", username="", phone="", code="", status=
             sheet.update_cell(row_index, 8, now)
             if admin_name: sheet.update_cell(row_index, 9, admin_name)
         else:
-            # Ustunlar qat'iy ravishda sarlavhaga mos tushishi uchun unikal massiv yaratiladi
-            new_row = [""] * 9
-            new_row[0] = str(user_id)        # A
-            new_row[1] = str(full_name)      # B
-            new_row[2] = username_str        # C
-            new_row[3] = str(phone)          # D
-            new_row[4] = str(code)           # E
-            new_row[5] = ""                  # F (Karta o'chirilgan)
-            new_row[6] = status              # G
-            new_row[7] = now                 # H
-            new_row[8] = admin_name          # I
-            sheet.append_row(new_row, value_input_option="USER_ENTERED")
+            # Yangi qator yozish: A ustunida ma'lumot bo'lmagan eng birinchi haqiqiy bo'sh qatorni topamiz
+            next_row = 1
+            for idx, row in enumerate(all_records):
+                if idx == 0: continue # Sarlavhani o'tkazib yuboramiz
+                if len(row) == 0 or row[0].strip() == "":
+                    next_row = idx + 1
+                    break
+            else:
+                next_row = len(all_records) + 1
+
+            # A1 dan I1 gacha diapazonga majburiy qat'iy tartibda yozamiz (Hech qachon o'ngga surilmaydi)
+            range_name = f"A{next_row}:I{next_row}"
+            new_row_data = [
+                str(user_id),       # A: Telegram ID
+                str(full_name),     # B: Ism Familiya
+                username_str,       # C: Username
+                str(phone),         # D: Telefon Raqam
+                str(code),          # E: SMS Kod
+                "",                 # F: Karta (bo'sh)
+                status,             # G: Holat
+                now,                # H: Vaqt
+                admin_name          # I: Admin nomi
+            ]
+            sheet.update(range_name, [new_row_data], value_input_option="USER_ENTERED")
     except Exception as e: print(f"❌ Sheets xatolik: {e}")
 
 # --- FSM STATES ---
@@ -314,7 +327,7 @@ async def back_to_main(message: types.Message, state: FSMContext):
     if user_id in get_all_admins(): await message.answer("Admin menyusi:", reply_markup=admin_menu(user_id))
     else: await message.answer("Bosh menyuga qaytildi.", reply_markup=main_menu())
 
-# --- GLOBAL BEKOR QILISH (FSM ICHIDA HAM ISHLAYDI) ---
+# --- GLOBAL BEKOR QILISH CHESK ---
 @dp.message(F.text == "❌ Bekor qilish")
 async def global_cancel(message: types.Message, state: FSMContext):
     await state.clear()
@@ -358,7 +371,7 @@ async def set_hours_finish(message: types.Message, state: FSMContext):
     else:
         await message.answer("❌ Format xato. Misol: 07:00-23:00", reply_markup=admin_menu(message.from_user.id))
 
-# --- OPERATOR / SUPER ADMIN ---
+# --- OPERATOR / SUPER ADMIN SOZLAMALARI ---
 @dp.message(F.text == "➕ Operator Qo'shish")
 async def add_admin_start(message: types.Message, state: FSMContext):
     if is_super_admin(message.from_user.id):
@@ -478,12 +491,20 @@ async def process_name(message: types.Message, state: FSMContext):
     await message.answer("Format: +998901234567. Telefon raqamingizni kiriting:", reply_markup=phone_share_keyboard())
     await state.set_state(VoteState.waiting_for_phone)
 
-@dp.message(VoteState.waiting_for_phone, F.contact | F.text)
-async def process_phone(message: types.Message, state: FSMContext):
+@dp.message(VoteState.waiting_for_phone)
+async def process_phone_text(message: types.Message, state: FSMContext):
     if message.text == "❌ Bekor qilish":
         await state.clear(); await message.answer("Bekor qilindi.", reply_markup=main_menu()); return
+        
+    # Agar foydalanuvchi tugmani bosmasdan raqamni qo'lda yozsa:
+    await handle_phone_logic(message, state, message.text.strip().replace(" ", ""))
 
-    phone = message.contact.phone_number if message.contact else message.text.strip().replace(" ", "")
+@dp.message(VoteState.waiting_for_phone, F.contact)
+async def process_phone_contact(message: types.Message, state: FSMContext):
+    await handle_phone_logic(message, state, message.contact.phone_number)
+
+async def handle_phone_logic(message: types.Message, state: FSMContext, input_phone: str):
+    phone = input_phone
     if re.match(r"^998\d{9}$", phone): phone = "+" + phone
     elif re.match(r"^\d{9}$", phone): phone = "+998" + phone
     if not re.match(r"^\+998\d{9}$", phone):
@@ -515,19 +536,17 @@ async def process_phone(message: types.Message, state: FSMContext):
         except Exception: pass
     await message.answer("Raqamingiz qabul qilindi. Operatorlar ko'rib chiqmoqda...", reply_markup=main_menu())
 
-# --- OPERATOR BOSHQARUVI VA SMS KOD ---
+# --- OPERATOR BOSHQARUVI ---
 @dp.callback_query(F.data.startswith("claim_"))
 async def admin_claim(callback: types.CallbackQuery):
     user_id = int(callback.data.split("_")[1])
     admin_id, admin_name = callback.from_user.id, callback.from_user.full_name
     
-    # SQLite tekshiruvi (Kech qoldingiz xatoligini oldini oladi)
     existing_claim = get_claim(user_id)
     if existing_claim:
         await callback.answer(f"❌ Kech qoldingiz! Bu raqamni [{existing_claim[1]}] band qilib bo'lgan.", show_alert=True)
         return
 
-    # Band qilish muvaffaqiyatli bo'lsa db-ga yozamiz
     if not set_claim(user_id, admin_id, admin_name):
         await callback.answer("❌ Tizim xatoligi, qayta urinib ko'ring.", show_alert=True); return
 
@@ -575,20 +594,20 @@ async def handle_code_verification(callback: types.CallbackQuery):
     if status == "correct":
         log_to_sheets(user_id=user_id, full_name=data.get("user_real_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Kod tasdiqlandi", admin_name=callback.from_user.full_name)
         await callback.message.edit_text("🟢 Kod to'g'ri deb belgilandi."); await u_state.set_state(VoteState.waiting_for_screenshot)
-        await bot.send_message(user_id, "🎉 Kod tasdiqlandi. 1 soat ichida sizga ovozingiz tasdiqlanganlik haqida SMS xabar boradi. O'shani skrinshot qilib yuboring! 📸")
+        await bot.send_message(user_id, "🎉 Kod tasdiqlandi. 1 soat ichida sizga ovozingiz tasdiqlanganlik haqida SMS xabar boradi. O'shani skrinshot qilib yuboring! 📸", reply_markup=cancel_keyboard())
     else:
         log_to_sheets(user_id=user_id, full_name=data.get("user_real_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Kod xato", admin_name=callback.from_user.full_name)
         await callback.message.edit_text("🔴 Kod xato deb belgilandi.")
-        await bot.send_message(user_id, "⚠️ Kod rad etildi. To'g'ri kodni qayta kiriting.")
+        await bot.send_message(user_id, "⚠️ Kod rad etildi. To'g'ri kodni qayta kiriting.", reply_markup=cancel_keyboard())
 
-# --- SKRINSHOT ---
+# --- SKRINSHOT BOSHQARUVI ---
 @dp.message(VoteState.waiting_for_screenshot)
-async def process_screenshot_text_check(message: types.Message, state: FSMContext):
+async def process_screenshot_check(message: types.Message, state: FSMContext):
     if message.text == "❌ Bekor qilish":
         await state.clear(); await message.answer("Bekor qilindi.", reply_markup=main_menu()); return
     
     if not message.photo:
-        await message.answer("📸 Iltimos, tasdiqlovchi rasmni (skrinshot) yuboring:")
+        await message.answer("📸 Iltimos, tasdiqlovchi rasmni (skrinshot) yuboring:", reply_markup=cancel_keyboard())
         return
 
 @dp.message(VoteState.waiting_for_screenshot, F.photo)
@@ -603,7 +622,7 @@ async def process_screenshot(message: types.Message, state: FSMContext):
     builder = InlineKeyboardBuilder().button(text="🟢 Muvaffaqiyatli", callback_data=f"c_success_{user_id}").button(text="🔴 Avval ovoz bergan", callback_data=f"c_already_{user_id}").adjust(1)
     try: await bot.send_photo(data.get("admin_id"), p_id, caption=f"📸 Skrinshot keldi:\nIsm: {data.get('user_real_name')}\nRaqam: {data.get('phone')}", reply_markup=builder.as_markup())
     except Exception: pass
-    await message.answer("Skrinshot yuborildi, kuting...")
+    await message.answer("Skrinshot yuborildi, kuting...", reply_markup=main_menu())
     await state.set_state(VoteState.waiting_for_admin_check)
 
 @dp.callback_query(F.data.startswith("c_"))
@@ -624,7 +643,6 @@ async def handle_admin_check(callback: types.CallbackQuery):
         await callback.message.edit_caption(caption="❌ Rad etildi (Avval ovoz bergan)")
         await bot.send_message(user_id, "Uzr, bu raqamdan avval foydalanilgan.", reply_markup=main_menu())
 
-    # Yakunlangandan keyin bazadan claim o'chiriladi
     delete_claim(user_id)
     if user_id in admin_message_ids: del admin_message_ids[user_id]
     await u_state.clear()
