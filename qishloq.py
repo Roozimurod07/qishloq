@@ -39,6 +39,15 @@ def init_db():
     cursor = conn.cursor()
     # Foydalanuvchilar jadvali
     cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
+    # Jonli statistika uchun arizalar holatini SQLite'da ham saqlash jadvali
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS applications (
+            user_id INTEGER,
+            phone TEXT,
+            status TEXT,
+            PRIMARY KEY (user_id, phone)
+        )
+    """)
     # Sozlamalar jadvali (Ish vaqti uchun)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS settings (
@@ -60,7 +69,38 @@ def add_user_to_db(user_id):
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f"❌ SQLite xatolik (add): {e}")
+        print(f"❌ SQLite xatolik (add_user): {e}")
+
+def save_app_status_to_db(user_id, phone, status):
+    try:
+        conn = sqlite3.connect("bot_settings.db")
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO applications (user_id, phone, status) VALUES (?, ?, ?)
+            ON CONFLICT(user_id, phone) DO UPDATE SET status=excluded.status
+        """, (user_id, str(phone), status))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"❌ SQLite xatolik (save_app): {e}")
+
+def get_sqlite_stats():
+    try:
+        conn = sqlite3.connect("bot_settings.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM applications")
+        total = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM applications WHERE status LIKE '%Muvaffaqiyatli%'")
+        success = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM applications WHERE status LIKE '%Xato%'")
+        wrong = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM applications WHERE status LIKE '%Avval%'")
+        already = cursor.fetchone()[0]
+        conn.close()
+        return total, success, wrong, already
+    except Exception as e:
+        print(f"❌ SQLite xatolik (get_stats): {e}")
+        return 0, 0, 0, 0
 
 def get_all_db_users():
     try:
@@ -71,7 +111,7 @@ def get_all_db_users():
         conn.close()
         return users
     except Exception as e:
-        print(f"❌ SQLite xatolik (get): {e}")
+        print(f"❌ SQLite xatolik (get_users): {e}")
         return []
 
 def get_working_hours():
@@ -110,6 +150,9 @@ def get_google_sheet():
 
 def log_to_sheets(user_id, owner_name="", full_name="", username="", phone="", code="", status="", admin_name=""):
     try:
+        if phone:
+            save_app_status_to_db(user_id, phone, status)
+            
         sheet = get_google_sheet()
         all_records = sheet.get_all_values()
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -169,7 +212,10 @@ def admin_menu(user_id):
         builder.button(text="🕒 Ish vaqtini sozlash") 
         
     builder.button(text="⬅️ Bosh menyu")
-    builder.adjust(1, 1, 2, 1) if user_id in SUPER_ADMINS else builder.adjust(1, 1, 1)
+    if user_id in SUPER_ADMINS:
+        builder.adjust(2, 2, 1, 1)
+    else:
+        builder.adjust(2, 1)
     return builder.as_markup(resize_keyboard=True)
 
 def phone_share_keyboard():
@@ -181,9 +227,7 @@ def phone_share_keyboard():
 
 def code_request_keyboard():
     builder = ReplyKeyboardBuilder()
-    builder.button(text="📱 SMS kodni yuborish", request_title_by_user_id=True) 
     builder.button(text="❌ Bekor qilish")
-    builder.adjust(1, 1)
     return builder.as_markup(resize_keyboard=True)
 
 def cancel_keyboard():
@@ -228,43 +272,27 @@ async def back_to_main(message: types.Message, state: FSMContext):
         await message.answer("Bosh menyuga qaytildi.", reply_markup=main_menu())
 
 
-# --- JONLI STATISTIKA ---
+# --- JONLI STATISTIKA (SQLITE BAZASIDAN REAL VAQTDA) ---
 @dp.message(F.text == "📊 Jonli Statistika")
 async def show_live_stats(message: types.Message):
     user_id = message.from_user.id
     if user_id not in ADMINS and user_id not in SUPER_ADMINS:
         return
         
-    waiting = await message.answer("🔄 Google Sheets'dan joriy ma'lumotlar hisoblanmoqda...")
-    try:
-        sheet = get_google_sheet()
-        all_rows = sheet.get_all_values()
-        
-        if len(all_rows) <= 1:
-            await waiting.edit_text("📊 Hozircha bazada hech qanday ariza kiritilmagan.")
-            return
-            
-        records = all_rows[1:] 
-        total = len(records)
-        success = sum(1 for r in records if len(r) >= 7 and "Muvaffaqiyatli" in r[6])
-        wrong_code = sum(1 for r in records if len(r) >= 7 and "Xato" in r[6])
-        already_voted = sum(1 for r in records if len(r) >= 7 and "Avval ovoz bergan" in r[6])
-        
-        web_app_builder = InlineKeyboardBuilder()
-        web_app_builder.button(text="🖥 Operator Web Paneli (Tezkor)", web_app=types.WebAppInfo(url="https://openbudget.uz"))
-        
-        stats_text = (
-            "📊 **Real vaqtdagi Jonli Statistika:**\n\n"
-            f"📥 Jami kelib tushgan arizalar: `{total} ta`\n"
-            f"🟢 Tasdiqlangan (Muvaffaqiyatli): `{success} ta`\n"
-            f"🔴 Rad etilgan (Avval ovoz bergan): `{already_voted} ta`\n"
-            f"⚠️ Xato kod kiritganlar: `{wrong_code} ta`\n\n"
-            f"🕒 Yangilangan vaqt: `{datetime.now().strftime('%H:%M:%S')}`"
-        )
-        await waiting.delete()
-        await message.answer(stats_text, parse_mode="Markdown", reply_markup=web_app_builder.as_markup())
-    except Exception as e:
-        await waiting.edit_text(f"❌ Statistikani hisoblashda xatolik: {e}")
+    total, success, wrong_code, already_voted = get_sqlite_stats()
+    
+    web_app_builder = InlineKeyboardBuilder()
+    web_app_builder.button(text="🖥 Operator Web Paneli (Tezkor)", web_app=types.WebAppInfo(url="https://openbudget.uz"))
+    
+    stats_text = (
+        "📊 **Real vaqtdagi Jonli Statistika (SQLite):**\n\n"
+        f"📥 Jami kelib tushgan arizalar: `{total} ta`\n"
+        f"🟢 Tasdiqlangan (Muvaffaqiyatli): `{success} ta`\n"
+        f"🔴 Rad etilgan (Avval ovoz bergan): `{already_voted} ta`\n"
+        f"⚠️ Xato kod kiritganlar: `{wrong_code} ta`\n\n"
+        f"🕒 Yangilangan vaqt: `{datetime.now().strftime('%H:%M:%S')}`"
+    )
+    await message.answer(stats_text, parse_mode="Markdown", reply_markup=web_app_builder.as_markup())
 
 
 # --- [FUNKSIYA 1]: ADMINLAR ISHINI BAHOLASH ---
@@ -321,7 +349,7 @@ async def show_admin_performance(message: types.Message):
         await waiting.delete()
         await message.answer(report_text, parse_mode="Markdown")
     except Exception as e:
-        await waiting.edit_text(f"❌ Adminlar statistikasini yuklashda xatolik: {e}")
+        await waiting.edit_text(f"❌ Adminlar statistikasi xatolik: {e}")
 
 
 # --- [FUNKSIYA 3]: ISH VAQTINI TELEGRAMDAN DINAMIK SOZLASH ---
@@ -379,7 +407,7 @@ async def process_end_hour(message: types.Message, state: FSMContext):
     )
 
 
-# --- XABAR YUBORISH (MAILING) ---
+# --- ROLLAR CHEKLOVI BILAN XABAR YUBORISH (MAILING) ---
 @dp.message(F.text == "📢 Xabar yuborish (Mailing)")
 async def start_broadcast(message: types.Message, state: FSMContext):
     if message.from_user.id not in SUPER_ADMINS:
@@ -387,7 +415,7 @@ async def start_broadcast(message: types.Message, state: FSMContext):
         return
     await message.answer(
         "📝 <b>Barcha foydalanuvchilarga yuboriladigan xabarni kiriting.</b>\n\n"
-        "Xabar matn shaklida yoki rasm (tagida matni bilan) bo'lishi mumkin.\n"
+        "Xabar matn shaklida yoki rasm bo'lishi mumkin.\n"
         "Jarayonni bekor qilish uchun <code>/cancel</code> deb yozing.",
         parse_mode="HTML"
     )
@@ -408,7 +436,6 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
 
     try:
         user_ids = get_all_db_users()
-
         if not user_ids:
             await status_msg.edit_text("❌ Bazada hech qanday foydalanuvchi topilmadi.")
             return
@@ -441,12 +468,11 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
             parse_mode="HTML",
             reply_markup=admin_menu(message.from_user.id)
         )
-
     except Exception as e:
         await status_msg.edit_text(f"❌ Xabar yuborishda xatolik yuz berdi: {e}")
 
 
-# --- EXCEL HISOBOT ---
+# --- ROLLAR CHEKLOVI BILAN EXCEL HISOBOT ---
 @dp.message(F.text == "📊 Hisobot (.xlsx)")
 async def send_excel_report(message: types.Message):
     if message.from_user.id not in SUPER_ADMINS:
@@ -454,7 +480,6 @@ async def send_excel_report(message: types.Message):
         return
 
     waiting_msg = await message.answer("🔄 Google Sheets'dan ma'lumotlar olinmoqda va Excel shakliga keltirilmoqda, iltimos kuting...")
-    
     try:
         sheet = get_google_sheet()
         all_data = sheet.get_all_values()
@@ -475,7 +500,6 @@ async def send_excel_report(message: types.Message):
         excel_buffer.seek(0)
         
         file_name = f"OpenBudget_Hisobot_{datetime.now().strftime('%d_%m_%Y')}.xlsx"
-        
         await waiting_msg.delete()
         await message.answer_document(
             document=types.BufferedInputFile(excel_buffer.getvalue(), filename=file_name),
@@ -497,20 +521,21 @@ async def process_help(message: types.Message):
         "Sizda biror bir muammo yoki savollar tug'ildimi? 🤷‍♂️\n"
         "• Kod kelmay qoldimi?\n"
         "• Tizimda xatolik beryaptimi?\n\n"
-        "Xavotir olmang! Quyidagi tugmani bosib, bizning professional operatorimizga to'g'ridan-to'g'ri murojaat qilishingiz mumkin. Tez fursatda yordam beramiz! 👇"
+        "Xavotir olmang! Quyidagi tugmani bosib, operatorimizga murojaat qiling! 👇"
     )
     await message.answer(text, parse_mode="HTML", reply_markup=inline_kb.as_markup())
 
 
-# --- OVOZ BERISH START (DINAMIK ISH VAQTI TEKSHIRUVI BILAN) ---
+# --- TUN REJIMLI OVOZ BERISH (SUPER ADMINLARGA CHEKLOV YO'Q) ---
 @dp.message(F.text == "🗳 Ovoz berish")
 async def start_voting(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     
+    # Dinamik ish vaqtini bazadan tekshiramiz (Tun rejimi)
     start_hour, end_hour = get_working_hours()
     current_hour = datetime.now().hour
     
-    if (current_hour >= end_hour or current_hour < start_hour) and (user_id not in SUPER_ADMINS and user_id not in ADMINS):
+    if (current_hour >= end_hour or current_hour < start_hour) and (user_id not in SUPER_ADMINS):
         await message.answer(f"🌙 **Tungi rejim faollashtirilgan!**\n\nOpen Budget tizimi tungi vaqtda ishlamasligi sababli bot arizalarni vaqtincha qabul qilmaydi. Iltimos, **ertalab soat {start_hour}:00 dan keyin** qayta urinib ko'ring!")
         return
 
@@ -547,13 +572,13 @@ async def process_owner_name(message: types.Message, state: FSMContext):
     await message.answer(
         f"✅ Rahmat! Raqam egasi: **{owner_name}**\n\n"
         "Endi ushbu shaxsning telefon raqamini quyidagi tugma orqali yuboring yoki qo'lda yozib kiriting:\n"
-        "*(Format: +998901234567)*",
+        "*(Format: +998901234567 yoki 901234567)*",
         parse_mode="Markdown", reply_markup=phone_share_keyboard()
     )
     await state.set_state(VoteState.waiting_for_phone)
 
 
-# --- RAQAM QABUL QILISH ---
+# --- RAQAM REGEX VALIDATSIYASI ---
 @dp.message(VoteState.waiting_for_phone, F.contact | F.text)
 async def process_phone(message: types.Message, state: FSMContext):
     if message.text == "❌ Bekor qilish":
@@ -567,18 +592,21 @@ async def process_phone(message: types.Message, state: FSMContext):
     else:
         phone = message.text.strip().replace(" ", "")
 
-    phone_pattern = r"^\+?998\d{9}$"
-    if not re.match(phone_pattern, phone):
+    # Qat'iy Regex validatsiyasi: +998XXXXXXXXX yoki 998XXXXXXXXX yoki XXXXXXXXX
+    if re.match(r"^\+998\d{9}$", phone):
+        pass
+    elif re.match(r"^998\d{9}$", phone):
+        phone = "+" + phone
+    elif re.match(r"^\d{9}$", phone):
+        phone = "+998" + phone
+    else:
         await message.answer(
             "⚠️ **Noto'g'ri telefon raqami kiritildi!**\n\n"
-            "Iltimos raqamni to'g'ri formatda kiriting.\n"
+            "Iltimos raqamni faqat O'zbekiston formatida kiriting.\n"
             "Misol: `+998901234567` yoki `901234567`", 
             parse_mode="Markdown", reply_markup=phone_share_keyboard()
         )
         return
-
-    if not phone.startswith("+"):
-        phone = "+" + phone
 
     user_data = await state.get_data()
     owner_name = user_data.get("owner_name", "Noma'lum")
@@ -668,7 +696,7 @@ async def admin_claim(callback: types.CallbackQuery):
     msg = await bot.send_message(
         user_id,
         "Sizning raqamingiz tizimga kiritildi! 📥\n"
-        "Telefoningizga kelgan <b>SMS kodni</b> quyidagi tugma orqali avtomatik yuboring yoki qo'lda yozib kiriting.\n"
+        "Telefoningizga kelgan <b>SMS kodni</b> kiriting yoki pastdagi bekor qilish tugmasidan foydalaning.\n"
         "⚠️ Vaqtingiz: <b>2:00 daqiqa</b>",
         parse_mode="HTML",
         reply_markup=code_request_keyboard()
@@ -689,7 +717,7 @@ async def countdown_timer(user_id, message_id, state: FSMContext):
         try:
             await bot.edit_message_text(
                 chat_id=user_id, message_id=message_id,
-                text=f"Telefoningizga kelgan <b>SMS kodni</b> quyidagi tugma orqali yoki qo'lda yozib kiriting.\n⚠️ Qolgan vaqt: <b>{minutes:02d}:{seconds:02d} daqiqa</b>",
+                text=f"Telefoningizga kelgan <b>SMS kodni</b> kiriting.\n⚠️ Qolgan vaqt: <b>{minutes:02d}:{seconds:02d} daqiqa</b>",
                 parse_mode="HTML"
             )
         except Exception: pass
@@ -877,7 +905,7 @@ async def handle_admin_check(callback: types.CallbackQuery):
 
 # --- BOTNI ISHGA TUSHIRISH ---
 async def main():
-    print("Bot yangi funksiyalar (Admin stat + Dinamik ish vaqti) bilan muvaffaqiyatli ishga tushdi...")
+    print("Bot barcha funksiyalar bilan muvaffaqiyatli ishga tushdi...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
