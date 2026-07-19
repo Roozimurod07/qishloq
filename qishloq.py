@@ -31,8 +31,6 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-claimed_users = {}
-claimed_admin_names = {}
 admin_message_ids = {}
 
 # --- SQLITE BAZA STRUKTURASI ---
@@ -43,6 +41,9 @@ def init_db():
     cursor.execute("CREATE TABLE IF NOT EXISTS extra_admins (admin_id INTEGER PRIMARY KEY)")
     cursor.execute("CREATE TABLE IF NOT EXISTS super_admins (admin_id INTEGER PRIMARY KEY)")
     cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+    # Admin band qilish tizimini xotiradan bazaga o'tkazamiz (Conflict bo'lganda ham o'chib ketmaydi)
+    cursor.execute("CREATE TABLE IF NOT EXISTS claims (user_id INTEGER PRIMARY KEY, admin_id INTEGER, admin_name TEXT)")
+    
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('start_time', '07:00')")
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('end_time', '23:00')")
     cursor.execute("CREATE TABLE IF NOT EXISTS admin_stats (admin_id INTEGER, action_type TEXT, count INTEGER DEFAULT 0, PRIMARY KEY (admin_id, action_type))")
@@ -115,6 +116,33 @@ def remove_extra_admin(admin_id):
     conn.commit(); conn.close()
     return True
 
+# --- CLAIMS MANAGEMENT (DB) ---
+def get_claim(user_id):
+    conn = sqlite3.connect("mailing_users.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT admin_id, admin_name FROM claims WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row if row else None
+
+def set_claim(user_id, admin_id, admin_name):
+    conn = sqlite3.connect("mailing_users.db")
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT INTO claims (user_id, admin_id, admin_name) VALUES (?, ?, ?)", (user_id, admin_id, admin_name))
+        conn.commit()
+        success = True
+    except sqlite3.IntegrityError:
+        success = False
+    conn.close()
+    return success
+
+def delete_claim(user_id):
+    conn = sqlite3.connect("mailing_users.db")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM claims WHERE user_id = ?", (user_id,))
+    conn.commit(); conn.close()
+
 def get_db_setting(key, default):
     conn = sqlite3.connect("mailing_users.db")
     cursor = conn.cursor()
@@ -186,14 +214,12 @@ def log_to_sheets(user_id, full_name="", username="", phone="", code="", status=
         username_str = f"@{username}" if username else "Mavjud emas"
         
         row_index = -1
-        # Avval bazada shu foydalanuvchi borligini tekshiramiz
         for idx, row in enumerate(all_records):
             if len(row) >= 4 and row[0] == str(user_id) and row[3] == str(phone):
                 row_index = idx + 1
                 break
         
         if row_index != -1:
-            # Mavjud qatorni ustunlar bo'yicha aniq koordinatada yangilash (hech narsa surilmaydi)
             if full_name: sheet.update_cell(row_index, 2, str(full_name))
             if username_str: sheet.update_cell(row_index, 3, username_str)
             if code: sheet.update_cell(row_index, 5, str(code))
@@ -201,18 +227,18 @@ def log_to_sheets(user_id, full_name="", username="", phone="", code="", status=
             sheet.update_cell(row_index, 8, now)
             if admin_name: sheet.update_cell(row_index, 9, admin_name)
         else:
-            # Yangi qator qo'shilganda qat'iy tartib [A, B, C, D, E, F, G, H, I]
-            sheet.append_row([
-                str(user_id),       # A ustun (1)
-                str(full_name),     # B ustun (2)
-                username_str,       # C ustun (3)
-                str(phone),         # D ustun (4)
-                str(code),          # E ustun (5)
-                "",                 # F ustun (6) -> Karta raqami olib tashlangan, bo'sh joy
-                status,             # G ustun (7)
-                now,                # H ustun (8)
-                admin_name          # I ustun (9)
-            ])
+            # Ustunlar qat'iy ravishda sarlavhaga mos tushishi uchun unikal massiv yaratiladi
+            new_row = [""] * 9
+            new_row[0] = str(user_id)        # A
+            new_row[1] = str(full_name)      # B
+            new_row[2] = username_str        # C
+            new_row[3] = str(phone)          # D
+            new_row[4] = str(code)           # E
+            new_row[5] = ""                  # F (Karta o'chirilgan)
+            new_row[6] = status              # G
+            new_row[7] = now                 # H
+            new_row[8] = admin_name          # I
+            sheet.append_row(new_row, value_input_option="USER_ENTERED")
     except Exception as e: print(f"❌ Sheets xatolik: {e}")
 
 # --- FSM STATES ---
@@ -288,6 +314,12 @@ async def back_to_main(message: types.Message, state: FSMContext):
     if user_id in get_all_admins(): await message.answer("Admin menyusi:", reply_markup=admin_menu(user_id))
     else: await message.answer("Bosh menyuga qaytildi.", reply_markup=main_menu())
 
+# --- GLOBAL BEKOR QILISH (FSM ICHIDA HAM ISHLAYDI) ---
+@dp.message(F.text == "❌ Bekor qilish")
+async def global_cancel(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Jarayon bekor qilindi.", reply_markup=main_menu())
+
 # --- STATISTIKA ---
 @dp.message(F.text == "📊 Jonli Statistika")
 async def show_detailed_stats(message: types.Message):
@@ -326,7 +358,7 @@ async def set_hours_finish(message: types.Message, state: FSMContext):
     else:
         await message.answer("❌ Format xato. Misol: 07:00-23:00", reply_markup=admin_menu(message.from_user.id))
 
-# --- OPERATOR / SUPER ADMIN SOZLAMALARI ---
+# --- OPERATOR / SUPER ADMIN ---
 @dp.message(F.text == "➕ Operator Qo'shish")
 async def add_admin_start(message: types.Message, state: FSMContext):
     if is_super_admin(message.from_user.id):
@@ -432,12 +464,11 @@ async def start_voting(message: types.Message, state: FSMContext):
     await message.answer("✍️ Iltimos, ism va familiyangizni kiriting:", reply_markup=cancel_keyboard())
     await state.set_state(VoteState.waiting_for_name)
 
-@dp.message(F.text == "❌ Bekor qilish", VoteState.waiting_for_name)
-async def cancel_name(message: types.Message, state: FSMContext):
-    await state.clear(); await message.answer("Bekor qilindi.", reply_markup=main_menu())
-
 @dp.message(VoteState.waiting_for_name)
 async def process_name(message: types.Message, state: FSMContext):
+    if message.text == "❌ Bekor qilish":
+        await state.clear(); await message.answer("Bekor qilindi.", reply_markup=main_menu()); return
+
     full_name_input = message.text.strip()
     if len(full_name_input) < 4:
         await message.answer("⚠️ Ism va familiya juda qisqa. Iltimos, to'liq kiriting:")
@@ -446,10 +477,6 @@ async def process_name(message: types.Message, state: FSMContext):
     await state.update_data(user_real_name=full_name_input)
     await message.answer("Format: +998901234567. Telefon raqamingizni kiriting:", reply_markup=phone_share_keyboard())
     await state.set_state(VoteState.waiting_for_phone)
-
-@dp.message(F.text == "❌ Bekor qilish", VoteState.waiting_for_phone)
-async def cancel_voting(message: types.Message, state: FSMContext):
-    await state.clear(); await message.answer("Bekor qilindi.", reply_markup=main_menu())
 
 @dp.message(VoteState.waiting_for_phone, F.contact | F.text)
 async def process_phone(message: types.Message, state: FSMContext):
@@ -486,17 +513,24 @@ async def process_phone(message: types.Message, state: FSMContext):
             msg = await bot.send_message(admin, f"📱 <b>Yangi raqam:</b>\n✍️ Ism: {real_name}\n📞 Raqam: {phone}", parse_mode="HTML", reply_markup=builder.as_markup())
             admin_message_ids[user_id][admin] = msg.message_id
         except Exception: pass
-    await message.answer("Raqamingiz qabul qilindi. Operatorlar ko'rib chiqmoqda...")
+    await message.answer("Raqamingiz qabul qilindi. Operatorlar ko'rib chiqmoqda...", reply_markup=main_menu())
 
 # --- OPERATOR BOSHQARUVI VA SMS KOD ---
 @dp.callback_query(F.data.startswith("claim_"))
 async def admin_claim(callback: types.CallbackQuery):
     user_id = int(callback.data.split("_")[1])
     admin_id, admin_name = callback.from_user.id, callback.from_user.full_name
-    if user_id in claimed_users:
-        await callback.answer("❌ Kech qoldingiz! Band qilingan.", show_alert=True); return
+    
+    # SQLite tekshiruvi (Kech qoldingiz xatoligini oldini oladi)
+    existing_claim = get_claim(user_id)
+    if existing_claim:
+        await callback.answer(f"❌ Kech qoldingiz! Bu raqamni [{existing_claim[1]}] band qilib bo'lgan.", show_alert=True)
+        return
 
-    claimed_users[user_id] = admin_id; claimed_admin_names[user_id] = admin_name
+    # Band qilish muvaffaqiyatli bo'lsa db-ga yozamiz
+    if not set_claim(user_id, admin_id, admin_name):
+        await callback.answer("❌ Tizim xatoligi, qayta urinib ko'ring.", show_alert=True); return
+
     increment_admin_stat(admin_id, 'claim')
     
     u_state = dp.fsm.resolve_context(bot, chat_id=user_id, user_id=user_id)
@@ -515,9 +549,16 @@ async def admin_claim(callback: types.CallbackQuery):
 
 @dp.message(VoteState.waiting_for_code)
 async def process_code(message: types.Message, state: FSMContext):
+    if message.text == "❌ Bekor qilish":
+        await state.clear(); await message.answer("Bekor qilindi.", reply_markup=main_menu()); return
+
     code = message.text; data = await state.get_data(); user_id = message.from_user.id
     await state.update_data(code=code)
-    log_to_sheets(user_id=user_id, full_name=data.get("user_real_name"), username=data.get("username"), phone=data.get("phone"), code=code, status="Kod kiritildi", admin_name=claimed_admin_names.get(user_id))
+    
+    claim_info = get_claim(user_id)
+    admin_name_str = claim_info[1] if claim_info else "Nomalum"
+
+    log_to_sheets(user_id=user_id, full_name=data.get("user_real_name"), username=data.get("username"), phone=data.get("phone"), code=code, status="Kod kiritildi", admin_name=admin_name_str)
 
     verify_kb = InlineKeyboardBuilder().button(text="✅ To'g'ri", callback_data=f"v_correct_{user_id}").button(text="❌ Xato", callback_data=f"v_wrong_{user_id}").adjust(2)
     try: await bot.send_message(data.get("admin_id"), f"🔢 Kod keldi: <code>{code}</code>\nIsm: {data.get('user_real_name')}\nTelefon: {data.get('phone')}", parse_mode="HTML", reply_markup=verify_kb.as_markup())
@@ -540,11 +581,24 @@ async def handle_code_verification(callback: types.CallbackQuery):
         await callback.message.edit_text("🔴 Kod xato deb belgilandi.")
         await bot.send_message(user_id, "⚠️ Kod rad etildi. To'g'ri kodni qayta kiriting.")
 
-# --- SKRINSHOT VA YAKUNIY TASDIQLASH ---
+# --- SKRINSHOT ---
+@dp.message(VoteState.waiting_for_screenshot)
+async def process_screenshot_text_check(message: types.Message, state: FSMContext):
+    if message.text == "❌ Bekor qilish":
+        await state.clear(); await message.answer("Bekor qilindi.", reply_markup=main_menu()); return
+    
+    if not message.photo:
+        await message.answer("📸 Iltimos, tasdiqlovchi rasmni (skrinshot) yuboring:")
+        return
+
 @dp.message(VoteState.waiting_for_screenshot, F.photo)
 async def process_screenshot(message: types.Message, state: FSMContext):
     p_id = message.photo[-1].file_id; data = await state.get_data(); user_id = message.from_user.id
-    log_to_sheets(user_id=user_id, full_name=data.get("user_real_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Skrinshot keldi", admin_name=claimed_admin_names.get(user_id))
+    
+    claim_info = get_claim(user_id)
+    admin_name_str = claim_info[1] if claim_info else "Nomalum"
+
+    log_to_sheets(user_id=user_id, full_name=data.get("user_real_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Skrinshot keldi", admin_name=admin_name_str)
 
     builder = InlineKeyboardBuilder().button(text="🟢 Muvaffaqiyatli", callback_data=f"c_success_{user_id}").button(text="🔴 Avval ovoz bergan", callback_data=f"c_already_{user_id}").adjust(1)
     try: await bot.send_photo(data.get("admin_id"), p_id, caption=f"📸 Skrinshot keldi:\nIsm: {data.get('user_real_name')}\nRaqam: {data.get('phone')}", reply_markup=builder.as_markup())
@@ -570,8 +624,8 @@ async def handle_admin_check(callback: types.CallbackQuery):
         await callback.message.edit_caption(caption="❌ Rad etildi (Avval ovoz bergan)")
         await bot.send_message(user_id, "Uzr, bu raqamdan avval foydalanilgan.", reply_markup=main_menu())
 
-    if user_id in claimed_users: del claimed_users[user_id]
-    if user_id in claimed_admin_names: del claimed_admin_names[user_id]
+    # Yakunlangandan keyin bazadan claim o'chiriladi
+    delete_claim(user_id)
     if user_id in admin_message_ids: del admin_message_ids[user_id]
     await u_state.clear()
 
