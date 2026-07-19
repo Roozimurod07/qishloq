@@ -204,7 +204,6 @@ def get_google_sheet():
         creds = ServiceAccountCredentials.from_json_keyfile_name("open.json", scope)
     return gspread.authorize(creds).open(GOOGLE_SHEET_NAME).sheet1
 
-# Google sheets'ni sinxron bloklanishini oldini olish uchun asinxron wrapper yaratamiz
 def _sync_log_to_sheets(user_id, full_name, username, phone, code, status, admin_name):
     try:
         sheet = get_google_sheet()
@@ -240,16 +239,13 @@ def _sync_log_to_sheets(user_id, full_name, username, phone, code, status, admin
                 str(user_id), str(full_name), username_str, str(phone), 
                 str(code), "", status, now, admin_name
             ]
-            # Eng so'nggi gspread standartiga asosan xavfsiz format
             sheet.update(range_name, [new_row_data], value_input_option="USER_ENTERED")
         logging.info(f"✅ Google Sheets muvaffaqiyatli yangilandi: {phone}")
     except Exception as e:
         logging.error(f"❌ Google Sheets xatoligi: {e}")
 
 async def log_to_sheets_async(user_id, full_name="", username="", phone="", code="", status="", admin_name=""):
-    # Google Sheets funksiyasini alohida oqimga (Thread) olib chiqamiz, shunda bot qotib qolmaydi
     await asyncio.to_thread(_sync_log_to_sheets, user_id, full_name, username, phone, code, status, admin_name)
-
 
 # --- FSM STATES ---
 class VoteState(StatesGroup):
@@ -324,7 +320,6 @@ async def back_to_main(message: types.Message, state: FSMContext):
     if user_id in get_all_admins(): await message.answer("Admin menyusi:", reply_markup=admin_menu(user_id))
     else: await message.answer("Bosh menyuga qaytildi.", reply_markup=main_menu())
 
-# --- GLOBAL BEKOR QILISH CHESK ---
 @dp.message(F.text == "❌ Bekor qilish")
 async def global_cancel(message: types.Message, state: FSMContext):
     await state.clear()
@@ -454,7 +449,7 @@ async def send_excel_report(message: types.Message):
         for row in all_data: ws.append(row)
         buf = io.BytesIO(); wb.save(buf); buf.seek(0)
         await waiting_msg.delete()
-        await message.answer_document(document=types.BufferedInputFile(buf.getvalue(), filename="Hisobot.xlsx"), caption="📊 Barcha arizalar hisoboti.")
+        await message.answer_document(document=types.BufferedInputFile(buf.getvalue(), filename="Hisobot.xlsx"), caption="📊 Barakali ovozlar hisoboti.")
     except Exception as e: await waiting_msg.edit_text(f"❌ Xatolik: {e}")
 
 @dp.message(F.text == "🙋‍♂️ Yordam")
@@ -463,7 +458,7 @@ async def process_help(message: types.Message):
 
 
 # =====================================================================
-# 🔥 OVOZ BERISH INTERFEYSI 🔥
+# 🔥 OVOZ BERISH INTERFEYSI (TUZATILGAN QISMI) 🔥
 # =====================================================================
 
 @dp.message(F.text == "🗳 Ovoz berish")
@@ -506,38 +501,36 @@ async def handle_phone_logic(message: types.Message, state: FSMContext, input_ph
     if not re.match(r"^\+998\d{9}$", phone):
         await message.answer("⚠️ Noto'g'ri format. Qayta kiriting:"); return
 
-    # Google Sheets'dan tekshirishni bot bloklanmasligi uchun asinxron oqimga chiqaramiz
-    try:
-        all_records = await asyncio.to_thread(lambda: get_google_sheet().get_all_values())
-        for row in all_records:
-            if len(row) >= 4 and row[3] == str(phone):
-                if row[6] in ["Admin qabul qildi", "Kod kiritildi", "Kod tasdiqlandi", "Skrinshot keldi", "Muvaffaqiyatli"]:
-                    await message.answer("❌ Ushbu raqamdan avval ovoz berilgan yoki jarayon yakunlanmagan!", reply_markup=main_menu())
-                    await state.clear(); return
-    except Exception as e: 
-        logging.error(f"Sheets tekshirishda xato: {e}")
-
     user_id = message.from_user.id
     username = message.from_user.username
     data = await state.get_data()
     real_name = data.get("user_real_name")
 
     await state.update_data(phone=phone, username=username)
-    
-    # Google Sheets asinxron chaqiriladi — bot aslo qotmaydi
-    await log_to_sheets_async(user_id=user_id, full_name=real_name, username=username, phone=phone, status="Raqam kiritildi")
 
+    # --- 1-QADAM: ADMINLARGA XABARNI DARHOL YUBORISH (HECH QANDAY TO'SIQSIZ) ---
     builder = InlineKeyboardBuilder().button(text="✅ Qabul qilish (Band qilish)", callback_data=f"claim_{user_id}")
     admin_message_ids[user_id] = {}
     
-    # Adminlarga yuborish
-    for admin in get_all_admins():
+    admins_list = get_all_admins()
+    for admin in admins_list:
         try:
-            msg = await bot.send_message(admin, f"📱 <b>Yangi raqam:</b>\n✍️ Ism: {real_name}\n📞 Raqam: {phone}", parse_mode="HTML", reply_markup=builder.as_markup())
+            msg = await bot.send_message(
+                chat_id=admin, 
+                text=f"📱 <b>Yangi raqam keldi:</b>\n✍️ Ism: {real_name}\n📞 Raqam: {phone}", 
+                parse_mode="HTML", 
+                reply_markup=builder.as_markup()
+            )
             admin_message_ids[user_id][admin] = msg.message_id
-        except Exception: pass
+        except Exception as e: 
+            logging.error(f"Admin {admin}ga xabar ketmadi: {e}")
         
     await message.answer("Raqamingiz qabul qilindi. Operatorlar ko'rib chiqmoqda...", reply_markup=main_menu())
+
+    # --- 2-QADAM: SHEETGA YOZISHNI FONDA, BOTNI TO'XTATMAGAN HOLDA BAJARISH ---
+    # asyncio.create_task kod pastga qarab to'xtamay davom etishi uchun fonda ishga tushiradi
+    asyncio.create_task(log_to_sheets_async(user_id=user_id, full_name=real_name, username=username, phone=phone, status="Raqam kiritildi"))
+
 
 # --- OPERATOR BOSHQARUVI ---
 @dp.callback_query(F.data.startswith("claim_"))
@@ -560,7 +553,7 @@ async def admin_claim(callback: types.CallbackQuery):
     await u_state.update_data(admin_id=admin_id)
     u_data = await u_state.get_data()
 
-    await log_to_sheets_async(user_id=user_id, full_name=u_data.get("user_real_name"), username=u_data.get("username"), phone=u_data.get("phone"), status="Admin qabul qildi", admin_name=admin_name)
+    asyncio.create_task(log_to_sheets_async(user_id=user_id, full_name=u_data.get("user_real_name"), username=u_data.get("username"), phone=u_data.get("phone"), status="Admin qabul qildi", admin_name=admin_name))
     
     if user_id in admin_message_ids:
         for a_id, m_id in admin_message_ids[user_id].items():
@@ -580,7 +573,7 @@ async def process_code(message: types.Message, state: FSMContext):
     claim_info = get_claim(user_id)
     admin_name_str = claim_info[1] if claim_info else "Nomalum"
 
-    await log_to_sheets_async(user_id=user_id, full_name=data.get("user_real_name"), username=data.get("username"), phone=data.get("phone"), code=code, status="Kod kiritildi", admin_name=admin_name_str)
+    asyncio.create_task(log_to_sheets_async(user_id=user_id, full_name=data.get("user_real_name"), username=data.get("username"), phone=data.get("phone"), code=code, status="Kod kiritildi", admin_name=admin_name_str))
 
     verify_kb = InlineKeyboardBuilder().button(text="✅ To'g'ri", callback_data=f"v_correct_{user_id}").button(text="❌ Xato", callback_data=f"v_wrong_{user_id}").adjust(2)
     try: await bot.send_message(data.get("admin_id"), f"🔢 Kod keldi: <code>{code}</code>\nIsm: {data.get('user_real_name')}\nTelefon: {data.get('phone')}", parse_mode="HTML", reply_markup=verify_kb.as_markup())
@@ -595,11 +588,11 @@ async def handle_code_verification(callback: types.CallbackQuery):
     data = await u_state.get_data()
 
     if status == "correct":
-        await log_to_sheets_async(user_id=user_id, full_name=data.get("user_real_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Kod tasdiqlandi", admin_name=callback.from_user.full_name)
+        asyncio.create_task(log_to_sheets_async(user_id=user_id, full_name=data.get("user_real_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Kod tasdiqlandi", admin_name=callback.from_user.full_name))
         await callback.message.edit_text("🟢 Kod to'g'ri deb belgilandi."); await u_state.set_state(VoteState.waiting_for_screenshot)
         await bot.send_message(user_id, "🎉 Kod tasdiqlandi. 1 soat ichida sizga ovozingiz tasdiqlanganlik haqida SMS xabar boradi. O'shani skrinshot qilib yuboring! 📸", reply_markup=cancel_keyboard())
     else:
-        await log_to_sheets_async(user_id=user_id, full_name=data.get("user_real_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Kod xato", admin_name=callback.from_user.full_name)
+        asyncio.create_task(log_to_sheets_async(user_id=user_id, full_name=data.get("user_real_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Kod xato", admin_name=callback.from_user.full_name))
         await callback.message.edit_text("🔴 Kod xato deb belgilandi.")
         await bot.send_message(user_id, "⚠️ Kod rad etildi. To'g'ri kodni qayta kiriting.", reply_markup=cancel_keyboard())
 
@@ -619,7 +612,7 @@ async def process_screenshot(message: types.Message, state: FSMContext):
     claim_info = get_claim(user_id)
     admin_name_str = claim_info[1] if claim_info else "Nomalum"
 
-    await log_to_sheets_async(user_id=user_id, full_name=data.get("user_real_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Skrinshot keldi", admin_name=admin_name_str)
+    asyncio.create_task(log_to_sheets_async(user_id=user_id, full_name=data.get("user_real_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Skrinshot keldi", admin_name=admin_name_str))
 
     builder = InlineKeyboardBuilder().button(text="🟢 Muvaffaqiyatli", callback_data=f"c_success_{user_id}").button(text="🔴 Avval ovoz bergan", callback_data=f"c_already_{user_id}").adjust(1)
     try: await bot.send_photo(data.get("admin_id"), p_id, caption=f"📸 Skrinshot keldi:\nIsm: {data.get('user_real_name')}\nRaqam: {data.get('phone')}", reply_markup=builder.as_markup())
@@ -635,12 +628,12 @@ async def handle_admin_check(callback: types.CallbackQuery):
     data = await u_state.get_data()
 
     if action == "success":
-        await log_to_sheets_async(user_id=user_id, full_name=data.get("user_real_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Muvaffaqiyatli", admin_name=callback.from_user.full_name)
+        asyncio.create_task(log_to_sheets_async(user_id=user_id, full_name=data.get("user_real_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Muvaffaqiyatli", admin_name=callback.from_user.full_name))
         increment_admin_stat(callback.from_user.id, 'success')
         await callback.message.edit_caption(caption="✅ Tasdiqlandi!")
         await bot.send_message(user_id, "🟢 Ovoz berganingiz uchun rahmat!", reply_markup=main_menu())
     else:
-        await log_to_sheets_async(user_id=user_id, full_name=data.get("user_real_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Avval ovoz bergan", admin_name=callback.from_user.full_name)
+        asyncio.create_task(log_to_sheets_async(user_id=user_id, full_name=data.get("user_real_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Avval ovoz bergan", admin_name=callback.from_user.full_name))
         increment_admin_stat(callback.from_user.id, 'already')
         await callback.message.edit_caption(caption="❌ Rad etildi (Avval ovoz bergan)")
         await bot.send_message(user_id, "Uzr, bu raqamdan avval foydalanilgan.", reply_markup=main_menu())
