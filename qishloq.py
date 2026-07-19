@@ -17,7 +17,7 @@ import openpyxl
 from oauth2client.service_account import ServiceAccountCredentials
 
 # --- SOZLAMALAR ---
-# ⚠️ TOKEn VA ID'LARNI TEKSHIRING!
+# ⚠️ TOKEN VA ID'LARNI TEKSHIRING!
 BOT_TOKEN = "8867325304:AAFHOVKs8HsR8z02tSL8NcUeXmLZlPKCzNQ"
 
 SUPER_ADMINS = [8317043750]  
@@ -280,7 +280,7 @@ async def show_live_stats(message: types.Message):
     total, success, wrong_code, already_voted = get_sqlite_stats()
     
     web_app_builder = InlineKeyboardBuilder()
-    web_app_builder.button(text="🖥 Operator Web Paneli (Tezkor)", web_app=types.WebAppInfo(url="https://openbudget.uz/boards/initiatives/initiative/55/272a7c73-d46f-4358-908d-1eab109639c8"))
+    web_app_builder.button(text="🖥 Operator Web Paneli (Tezkor)", web_app=types.WebAppInfo(url="https://openbudget.uz"))
     
     stats_text = (
         "📊 **Real vaqtdagi Jonli Statistika (SQLite):**\n\n"
@@ -293,7 +293,7 @@ async def show_live_stats(message: types.Message):
     await message.answer(stats_text, parse_mode="Markdown", reply_markup=web_app_builder.as_markup())
 
 
-# --- [FUNKSIYA 1]: ADMINLAR ISHINI BAHOLASH ---
+# --- ADMINLAR ISHINI BAHOLASH ---
 @dp.message(F.text == "📈 Adminlar statistikasi")
 async def show_admin_performance(message: types.Message):
     user_id = message.from_user.id
@@ -350,7 +350,7 @@ async def show_admin_performance(message: types.Message):
         await waiting.edit_text(f"❌ Adminlar statistikasi xatolik: {e}")
 
 
-# --- [FUNKSIYA 3]: ISH VAQTINI TELEGRAMDAN DINAMIK SOZLASH ---
+# --- ISH VAQTINI TELEGRAMDAN DINAMIK SOZLASH ---
 @dp.message(F.text == "🕒 Ish vaqtini sozlash")
 async def setup_working_hours(message: types.Message, state: FSMContext):
     if message.from_user.id not in SUPER_ADMINS:
@@ -524,7 +524,7 @@ async def process_help(message: types.Message):
     await message.answer(text, parse_mode="HTML", reply_markup=inline_kb.as_markup())
 
 
-# --- TUN REJIMLI OVOZ BERISH (SUPER ADMINLARGA CHEKLOV YO'Q) ---
+# --- TUN REJIMLI OVOZ BERISH ---
 @dp.message(F.text == "🗳 Ovoz berish")
 async def start_voting(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
@@ -575,7 +575,7 @@ async def process_owner_name(message: types.Message, state: FSMContext):
     await state.set_state(VoteState.waiting_for_phone)
 
 
-# --- RAQAM REGEX VALIDATSIYASI ---
+# --- RAQAM VALIDATSIYASI VA TAKRORIYLIK TEKSHIRUVI ---
 @dp.message(VoteState.waiting_for_phone, F.contact | F.text)
 async def process_phone(message: types.Message, state: FSMContext):
     if message.text == "❌ Bekor qilish":
@@ -603,6 +603,25 @@ async def process_phone(message: types.Message, state: FSMContext):
             parse_mode="Markdown", reply_markup=phone_share_keyboard()
         )
         return
+
+    # 🔍 GOOGLE SHEETS'DAN RAQAMNING MUVAFFAQIYATLI BO'LGANLIGINI TEKSHIRISH
+    try:
+        sheet = get_google_sheet()
+        all_records = sheet.get_all_values()
+        
+        for row in all_records:
+            if len(row) >= 7:
+                if row[4] == str(phone) and "Muvaffaqiyatli" in row[6]:
+                    await message.answer(
+                        f"❌ **Arizangiz rad etildi!**\n\n"
+                        f"Ushbu ({phone}) telefon raqami orqali allaqachon muvaffaqiyatli ovoz berilgan. "
+                        f"Bitta raqamdan faqat bir marta ovoz berish mumkin!", 
+                        parse_mode="Markdown", reply_markup=main_menu()
+                    )
+                    await state.clear()
+                    return
+    except Exception as e:
+        print(f"❌ Takroriylikni tekshirishda xatolik: {e}")
 
     user_data = await state.get_data()
     owner_name = user_data.get("owner_name", "Noma'lum")
@@ -800,7 +819,7 @@ async def handle_code_verification(callback: types.CallbackQuery):
         await bot.send_message(
             user_id,
             "🎉 Ajoyib! Siz yuborgan kod muvaffaqiyatli tasdiqlandi.\n\n"
-            "Endi telefoningizga kelgan 'Sizning ovozingiz muvaffaqiyatli qabul qilindi' degan SMSni skrinshot qilib shu yerga yuboring. 📸"
+            "Endi telefoningizga kelgan <b>'Sizning ovozingiz muvaffaqiyatli qabul qilindi'</b> degan SMSni skrinshot qilib shu yerga yuboring. 📸"
         )
 
     elif status == "wrong":
