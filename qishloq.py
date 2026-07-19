@@ -17,6 +17,7 @@ import openpyxl
 from oauth2client.service_account import ServiceAccountCredentials
 
 # --- SOZLAMALAR ---
+# ⚠️ TOKEn VA ID'LARNI TEKSHIRING!
 BOT_TOKEN = "8867325304:AAFHOVKs8HsR8z02tSL8NcUeXmLZlPKCzNQ"
 
 SUPER_ADMINS = [8317043750]  
@@ -37,9 +38,7 @@ admin_message_ids = {}
 def init_db():
     conn = sqlite3.connect("bot_settings.db")
     cursor = conn.cursor()
-    # Foydalanuvchilar jadvali
     cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
-    # Jonli statistika uchun arizalar holatini SQLite'da ham saqlash jadvali
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS applications (
             user_id INTEGER,
@@ -48,14 +47,12 @@ def init_db():
             PRIMARY KEY (user_id, phone)
         )
     """)
-    # Sozlamalar jadvali (Ish vaqti uchun)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT
         )
     """)
-    # Defolt ish vaqti (07:00 dan 23:00 gacha)
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('start_hour', '7')")
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('end_hour', '23')")
     conn.commit()
@@ -212,6 +209,7 @@ def admin_menu(user_id):
         builder.button(text="🕒 Ish vaqtini sozlash") 
         
     builder.button(text="⬅️ Bosh menyu")
+    
     if user_id in SUPER_ADMINS:
         builder.adjust(2, 2, 1, 1)
     else:
@@ -246,7 +244,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
         add_user_to_db(user_id)
 
     if user_id in ADMINS or user_id in SUPER_ADMINS:
-        await message.answer("🔑 **Admin panelga xush kelibsiz!**", reply_markup=admin_menu(user_id))
+        await message.answer("🔑 <b>Admin panelga xush kelibsiz!</b>\n\nQuyidagi tugmalardan foydalaning:", parse_mode="HTML", reply_markup=admin_menu(user_id))
     else:
         await message.answer(
             "👋 Assalomu alaykum! Open Budget ovoz berish botiga xush kelibsiz.\n\n"
@@ -531,7 +529,6 @@ async def process_help(message: types.Message):
 async def start_voting(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     
-    # Dinamik ish vaqtini bazadan tekshiramiz (Tun rejimi)
     start_hour, end_hour = get_working_hours()
     current_hour = datetime.now().hour
     
@@ -592,7 +589,6 @@ async def process_phone(message: types.Message, state: FSMContext):
     else:
         phone = message.text.strip().replace(" ", "")
 
-    # Qat'iy Regex validatsiyasi: +998XXXXXXXXX yoki 998XXXXXXXXX yoki XXXXXXXXX
     if re.match(r"^\+998\d{9}$", phone):
         pass
     elif re.match(r"^998\d{9}$", phone):
