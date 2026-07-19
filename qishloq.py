@@ -21,7 +21,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 # --- SOZLAMALAR ---
 BOT_TOKEN = "8867325304:AAFHOVKs8HsR8z02tSL8NcUeXmLZlPKCzNQ"
-FOUNDER_ID = 8317043750  # Bot asoschisi (Buni o'chirib bo'lmaydi)
+FOUNDER_ID = 8317043750  # Bot asoschisi
 
 GOOGLE_SHEET_NAME = "Qorabayir"  
 UZ_TZ = pytz.timezone('Asia/Tashkent')
@@ -178,7 +178,7 @@ def get_google_sheet():
         creds = ServiceAccountCredentials.from_json_keyfile_name("open.json", scope)
     return gspread.authorize(creds).open(GOOGLE_SHEET_NAME).sheet1
 
-def log_to_sheets(user_id, full_name="", username="", phone="", code="", card="", status="", admin_name=""):
+def log_to_sheets(user_id, full_name="", username="", phone="", code="", status="", admin_name=""):
     try:
         sheet = get_google_sheet()
         all_records = sheet.get_all_values()
@@ -193,22 +193,20 @@ def log_to_sheets(user_id, full_name="", username="", phone="", code="", card=""
         
         if row_index != -1:
             if code: sheet.update_cell(row_index, 5, str(code))
-            if card: sheet.update_cell(row_index, 6, str(card))
             if status: sheet.update_cell(row_index, 7, status)
             sheet.update_cell(row_index, 8, now)
             if admin_name: sheet.update_cell(row_index, 9, admin_name)
         else:
-            sheet.append_row([str(user_id), full_name, username_str, str(phone), str(code), str(card), status, now, admin_name])
+            sheet.append_row([str(user_id), full_name, username_str, str(phone), str(code), "", status, now, admin_name])
     except Exception as e: print(f"❌ Sheets xatolik: {e}")
 
 # --- FSM STATES ---
 class VoteState(StatesGroup):
+    waiting_for_name = State()       # YANGI: Ism-familiya kutish bosqichi
     waiting_for_phone = State()
     waiting_for_code = State()
     waiting_for_screenshot = State()
     waiting_for_admin_check = State()  
-    waiting_for_card = State()
-    waiting_for_card_name = State()
 
 class AdminState(StatesGroup):
     waiting_for_broadcast_msg = State()
@@ -243,6 +241,12 @@ def admin_menu(user_id):
     else: builder.adjust(2, 1)
     return builder.as_markup(resize_keyboard=True)
 
+def cancel_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="❌ Bekor qilish")
+    builder.adjust(1)
+    return builder.as_markup(resize_keyboard=True)
+
 def phone_share_keyboard():
     builder = ReplyKeyboardBuilder()
     builder.button(text="📱 Telefon raqamni yuborish", request_contact=True)
@@ -260,7 +264,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     if user_id in get_all_admins():
         await message.answer("🔑 <b>Admin panelga xush kelibsiz!</b>", reply_markup=admin_menu(user_id), parse_mode="HTML")
     else:
-        await message.answer("👋 Assalomu alaykum! Open Budget ovoz berish botiga xush kelibsiz.\nQORABAYIR MFYga o'z ovozingizni bering ILTIMOS.", reply_markup=main_menu())
+        await message.answer("👋 Assalomu alaykum! Open Budget ovoz berish botiga xush kelibsiz.\nQORABAYIR MFYga o'z ovozingizni berib loyihamiz rivojiga hissa qo'shing.", reply_markup=main_menu())
 
 @dp.message(F.text == "⬅️ Bosh menyu")
 async def back_to_main(message: types.Message, state: FSMContext):
@@ -334,8 +338,7 @@ async def del_admin_finish(message: types.Message, state: FSMContext):
         await message.answer("✅ Operator o'chirildi.", reply_markup=admin_menu(message.from_user.id))
     else: await message.answer("❌ Topilmadi.", reply_markup=admin_menu(message.from_user.id))
 
-
-# --- SUPER ADMIN QO'SHISH / O'CHIRISH (DINAMIK) ---
+# --- SUPER ADMIN QO'SHISH / O'CHIRISH ---
 @dp.message(F.text == "👑 Super Admin Qo'shish")
 async def add_super_start(message: types.Message, state: FSMContext):
     if is_super_admin(message.from_user.id):
@@ -363,8 +366,7 @@ async def del_super_finish(message: types.Message, state: FSMContext):
     await state.clear()
     if message.text.isdigit() and remove_super_admin_db(int(message.text)):
         await message.answer("✅ Super Admin muvaffaqiyatli o'chirildi.", reply_markup=admin_menu(message.from_user.id))
-    else: await message.answer("❌ O'chirib bo'lmadi yoki topilmadi (Asoschining ID raqamini o'chirib bo'lmaydi).", reply_markup=admin_menu(message.from_user.id))
-
+    else: await message.answer("❌ O'chirib bo'lmadi yoki topilmadi.", reply_markup=admin_menu(message.from_user.id))
 
 # --- MAILING VA EXCEL REPORT ---
 @dp.message(F.text == "📢 Xabar yuborish (Mailing)")
@@ -413,6 +415,21 @@ async def start_voting(message: types.Message, state: FSMContext):
         await message.answer(f"🌙 Bot hozirda yopiq! Ish vaqti: {get_db_setting('start_time', '07:00')} - {get_db_setting('end_time', '23:00')}")
         return
     await state.clear()
+    await message.answer("✍️ Iltimos, ism va familiyangizni kiriting:", reply_markup=cancel_keyboard())
+    await state.set_state(VoteState.waiting_for_name)
+
+@dp.message(F.text == "❌ Bekor qilish", VoteState.waiting_for_name)
+async def cancel_name(message: types.Message, state: FSMContext):
+    await state.clear(); await message.answer("Bekor qilindi.", reply_markup=main_menu())
+
+@dp.message(VoteState.waiting_for_name)
+async def process_name(message: types.Message, state: FSMContext):
+    full_name_input = message.text.strip()
+    if len(full_name_input) < 4:
+        await message.answer("⚠️ Ism va familiya juda qisqa. Iltimos, to'liq kiriting:")
+        return
+    
+    await state.update_data(user_real_name=full_name_input)
     await message.answer("Format: +998901234567. Telefon raqamingizni kiriting:", reply_markup=phone_share_keyboard())
     await state.set_state(VoteState.waiting_for_phone)
 
@@ -434,21 +451,25 @@ async def process_phone(message: types.Message, state: FSMContext):
     try:
         all_records = get_google_sheet().get_all_values()
         for row in all_records:
-            if len(row) >= 7 and row[3] == str(phone):
+            if len(row) >= 4 and row[3] == str(phone):
                 if row[6] in ["Admin qabul qildi", "Kod kiritildi", "Kod tasdiqlandi", "Skrinshot keldi", "Muvaffaqiyatli"]:
                     await message.answer("❌ Ushbu raqamdan avval ovoz berilgan yoki jarayon yakunlanmagan!", reply_markup=main_menu())
                     await state.clear(); return
     except Exception as e: print(f"Sheets tekshirishda xato: {e}")
 
-    user_id, full_name, username = message.from_user.id, message.from_user.full_name, message.from_user.username
-    await state.update_data(phone=phone, full_name=full_name, username=username)
-    log_to_sheets(user_id=user_id, full_name=full_name, username=username, phone=phone, status="Raqam kiritildi")
+    user_id = message.from_user.id
+    username = message.from_user.username
+    data = await state.get_data()
+    real_name = data.get("user_real_name")
+
+    await state.update_data(phone=phone, username=username)
+    log_to_sheets(user_id=user_id, full_name=real_name, username=username, phone=phone, status="Raqam kiritildi")
 
     builder = InlineKeyboardBuilder().button(text="✅ Qabul qilish (Band qilish)", callback_data=f"claim_{user_id}")
     admin_message_ids[user_id] = {}
     for admin in get_all_admins():
         try:
-            msg = await bot.send_message(admin, f"📱 <b>Yangi raqam:</b>\n👤 Foydalanuvchi: {full_name}\n📞 Raqam: {phone}", parse_mode="HTML", reply_markup=builder.as_markup())
+            msg = await bot.send_message(admin, f"📱 <b>Yangi raqam:</b>\n✍️ Ism: {real_name}\n📞 Raqam: {phone}", parse_mode="HTML", reply_markup=builder.as_markup())
             admin_message_ids[user_id][admin] = msg.message_id
         except Exception: pass
     await message.answer("Raqamingiz qabul qilindi. Operatorlar ko'rib chiqmoqda...")
@@ -469,7 +490,7 @@ async def admin_claim(callback: types.CallbackQuery):
     await u_state.update_data(admin_id=admin_id)
     u_data = await u_state.get_data()
 
-    log_to_sheets(user_id=user_id, phone=u_data.get("phone"), status="Admin qabul qildi", admin_name=admin_name)
+    log_to_sheets(user_id=user_id, full_name=u_data.get("user_real_name"), phone=u_data.get("phone"), status="Admin qabul qildi", admin_name=admin_name)
     
     if user_id in admin_message_ids:
         for a_id, m_id in admin_message_ids[user_id].items():
@@ -482,10 +503,10 @@ async def admin_claim(callback: types.CallbackQuery):
 async def process_code(message: types.Message, state: FSMContext):
     code = message.text; data = await state.get_data(); user_id = message.from_user.id
     await state.update_data(code=code)
-    log_to_sheets(user_id=user_id, phone=data.get("phone"), code=code, status="Kod kiritildi", admin_name=claimed_admin_names.get(user_id))
+    log_to_sheets(user_id=user_id, full_name=data.get("user_real_name"), phone=data.get("phone"), code=code, status="Kod kiritildi", admin_name=claimed_admin_names.get(user_id))
 
     verify_kb = InlineKeyboardBuilder().button(text="✅ To'g'ri", callback_data=f"v_correct_{user_id}").button(text="❌ Xato", callback_data=f"v_wrong_{user_id}").adjust(2)
-    try: await bot.send_message(data.get("admin_id"), f"🔢 Kod keldi: <code>{code}</code>\nTelefon: {data.get('phone')}", parse_mode="HTML", reply_markup=verify_kb.as_markup())
+    try: await bot.send_message(data.get("admin_id"), f"🔢 Kod keldi: <code>{code}</code>\nIsm: {data.get('user_real_name')}\nTelefon: {data.get('phone')}", parse_mode="HTML", reply_markup=verify_kb.as_markup())
     except Exception: pass
     await message.answer("Kod tekshirilmoqda...")
 
@@ -497,11 +518,11 @@ async def handle_code_verification(callback: types.CallbackQuery):
     data = await u_state.get_data()
 
     if status == "correct":
-        log_to_sheets(user_id=user_id, phone=data.get("phone"), status="Kod tasdiqlandi", admin_name=callback.from_user.full_name)
+        log_to_sheets(user_id=user_id, full_name=data.get("user_real_name"), phone=data.get("phone"), status="Kod tasdiqlandi", admin_name=callback.from_user.full_name)
         await callback.message.edit_text("🟢 Kod to'g'ri deb belgilandi."); await u_state.set_state(VoteState.waiting_for_screenshot)
         await bot.send_message(user_id, "🎉 Kod tasdiqlandi. 1 soat ichida sizga ovozingiz tasdiqlanganlik haqida SMS xabar boradi. O'shani skrinshot qilib yuboring! 📸")
     else:
-        log_to_sheets(user_id=user_id, phone=data.get("phone"), status="Kod xato", admin_name=callback.from_user.full_name)
+        log_to_sheets(user_id=user_id, full_name=data.get("user_real_name"), phone=data.get("phone"), status="Kod xato", admin_name=callback.from_user.full_name)
         await callback.message.edit_text("🔴 Kod xato deb belgilandi.")
         await bot.send_message(user_id, "⚠️ Kod rad etildi. To'g'ri kodni qayta kiriting.")
 
@@ -509,10 +530,10 @@ async def handle_code_verification(callback: types.CallbackQuery):
 @dp.message(VoteState.waiting_for_screenshot, F.photo)
 async def process_screenshot(message: types.Message, state: FSMContext):
     p_id = message.photo[-1].file_id; data = await state.get_data(); user_id = message.from_user.id
-    log_to_sheets(user_id=user_id, phone=data.get("phone"), status="Skrinshot keldi", admin_name=claimed_admin_names.get(user_id))
+    log_to_sheets(user_id=user_id, full_name=data.get("user_real_name"), phone=data.get("phone"), status="Skrinshot keldi", admin_name=claimed_admin_names.get(user_id))
 
     builder = InlineKeyboardBuilder().button(text="🟢 Muvaffaqiyatli", callback_data=f"c_success_{user_id}").button(text="🔴 Avval ovoz bergan", callback_data=f"c_already_{user_id}").adjust(1)
-    try: await bot.send_photo(data.get("admin_id"), p_id, caption=f"📸 Skrinshot keldi:\nRaqam: {data.get('phone')}", reply_markup=builder.as_markup())
+    try: await bot.send_photo(data.get("admin_id"), p_id, caption=f"📸 Skrinshot keldi:\nIsm: {data.get('user_real_name')}\nRaqam: {data.get('phone')}", reply_markup=builder.as_markup())
     except Exception: pass
     await message.answer("Skrinshot yuborildi, kuting...")
     await state.set_state(VoteState.waiting_for_admin_check)
@@ -525,48 +546,23 @@ async def handle_admin_check(callback: types.CallbackQuery):
     data = await u_state.get_data()
 
     if action == "success":
-        log_to_sheets(user_id=user_id, phone=data.get("phone"), status="Muvaffaqiyatli", admin_name=callback.from_user.full_name)
+        log_to_sheets(user_id=user_id, full_name=data.get("user_real_name"), phone=data.get("phone"), status="Muvaffaqiyatli", admin_name=callback.from_user.full_name)
         increment_admin_stat(callback.from_user.id, 'success')
         await callback.message.edit_caption(caption="✅ Tasdiqlandi!")
-        await u_state.set_state(VoteState.waiting_for_card)
-        await bot.send_message(user_id, "Tabriklaymiz! Ovoz tasdiqlandi. 💳 Plastik karta raqamingizni yuboring:")
+        
+        # TO'LOV VA KARTA BUTUNLAY OLIB TASHLANDI - TO'G'RI RAHMATNOMAGA O'TADI
+        await bot.send_message(user_id, "🟢 Ovoz berganingiz uchun rahmat!", reply_markup=main_menu())
     else:
-        log_to_sheets(user_id=user_id, phone=data.get("phone"), status="Avval ovoz bergan", admin_name=callback.from_user.full_name)
+        log_to_sheets(user_id=user_id, full_name=data.get("user_real_name"), phone=data.get("phone"), status="Avval ovoz bergan", admin_name=callback.from_user.full_name)
         increment_admin_stat(callback.from_user.id, 'already')
         await callback.message.edit_caption(caption="❌ Rad etildi (Avval ovoz bergan)")
-        await u_state.clear(); await bot.send_message(user_id, "Uzr, bu raqamdan avval foydalanilgan.", reply_markup=main_menu())
+        await bot.send_message(user_id, "Uzr, bu raqamdan avval foydalanilgan.", reply_markup=main_menu())
 
-# --- KARTA MA'LUMOTLARINI YAKUNLASH ---
-@dp.message(VoteState.waiting_for_card)
-async def process_card(message: types.Message, state: FSMContext):
-    clean_card = re.sub(r'\D', '', message.text)
-    if len(clean_card) != 16 or not clean_card.startswith(('8600', '5614', '9860', '4444', '6262')):
-        await message.answer("⚠️ Karta raqami xato. 16 xonali Uzcard/Humo karta raqamini qayta kiriting:"); return
-
-    await state.update_data(card=clean_card)
-    await message.answer("👤 Karta egasining ism-familiyasini kiriting (Xatoliksiz, to'liq yozing):")
-    await state.set_state(VoteState.waiting_for_card_name)
-
-@dp.message(VoteState.waiting_for_card_name)
-async def process_card_name(message: types.Message, state: FSMContext):
-    card_name = message.text.strip()
-    if len(card_name) < 3:
-        await message.answer("⚠️ Ism juda qisqa. Iltimos, to'liq ism-familiyani kiriting:"); return
-
-    data = await state.get_data()
-    user_id = message.from_user.id
-    phone = data.get("phone")
-    clean_card = data.get("card")
-
-    full_card_details = f"{clean_card} ({card_name})"
-    log_to_sheets(user_id=user_id, phone=phone, card=full_card_details, status="Muvaffaqiyatli", admin_name=claimed_admin_names.get(user_id))
-
-    await message.answer("Ma'lumotlaringiz qabul qilindi. Tez orada operatorlarimiz siz bilan bog'lanishadi. Rahmat!", reply_markup=main_menu())
-    
+    # Keshlangan ma'lumotlarni tozalash
     if user_id in claimed_users: del claimed_users[user_id]
     if user_id in claimed_admin_names: del claimed_admin_names[user_id]
     if user_id in admin_message_ids: del admin_message_ids[user_id]
-    await state.clear()
+    await u_state.clear()
 
 async def main(): await dp.start_polling(bot)
 if __name__ == "__main__": asyncio.run(main())
