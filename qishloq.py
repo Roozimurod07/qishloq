@@ -800,7 +800,7 @@ async def handle_code_verification(callback: types.CallbackQuery):
         await bot.send_message(
             user_id,
             "🎉 Ajoyib! Siz yuborgan kod muvaffaqiyatli tasdiqlandi.\n\n"
-            "Endi telefoningizga kelgan <b>'Sizning ovozingiz muvaffaqiyatli qabul qilindi'</b> degan SMSni skrinshot qilib shu yerga yuboring. 📸"
+            "Endi telefoningizga kelgan 'Sizning ovozingiz muvaffaqiyatli qabul qilindi' degan SMSni skrinshot qilib shu yerga yuboring. 📸"
         )
 
     elif status == "wrong":
