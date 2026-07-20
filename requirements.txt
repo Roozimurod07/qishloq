@@ -6,3 +6,4 @@ openpyxl
 google-genai
 pandas
 pytz
+asyncio
