@@ -228,7 +228,6 @@ async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()  
     user_id = message.from_user.id
     
-    # ✨ TUZATILDI: Start bosgan har qanday foydalanuvchi bazaga qo'shiladi (Admin bo'lsa ham)
     add_user_to_db(user_id)
 
     if user_id in get_all_admins():
@@ -320,7 +319,6 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
     sc, fc = 0, 0
     all_users = get_google_sheet().get_all_values()[1:]
     
-    # SQLite va Google Sheets dagi barcha unikal ID larni yig'amiz
     target_users = set()
     for row in all_users:
         if row and row[0].isdigit():
@@ -331,7 +329,6 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
         
     for u_id in target_users:
         try:
-            # ✨ TUZATILDI: Adminlarni o'tkazib yuboradigan 'continue' olib tashlandi.
             await bot.send_message(chat_id=u_id, text=message.text)
             sc += 1; await asyncio.sleep(0.05)
         except Exception: 
@@ -424,6 +421,42 @@ async def process_phone(message: types.Message, state: FSMContext):
         except Exception: pass
     await message.answer("Raqamingiz qabul qilindi. Operatorlar ko'rib chiqmoqda...")
 
+# --- 🔥 YANGI QO'SHILGAN BACKGROUND TAYMER FUNKSIYASI 🔥 ---
+async def session_timeout_task(user_id: int, state: FSMContext):
+    await asyncio.sleep(120)  # 2 daqiqa (120 soniya) fonda kutadi
+    current_state = await state.get_state()
+    
+    if current_state == VoteState.waiting_for_code:
+        data = await state.get_data()
+        phone = data.get("phone")
+        
+        # Google Sheets ga statusni "Muddati o'tdi (Timeout)" deb yozish
+        log_to_sheets(user_id=user_id, phone=phone, status="Muddati o'tdi (Timeout)", admin_name=claimed_admin_names.get(user_id))
+        
+        try:
+            await bot.send_message(
+                chat_id=user_id, 
+                text="⏱ <b>Vaqt tugadi!</b> Siz 2 daqiqa ichida SMS kodni yubormadingiz. Iltimos, jarayonni qaytadan boshlang.", 
+                parse_mode="HTML",
+                reply_markup=main_menu()
+            )
+        except Exception: pass
+        
+        admin_id = data.get("admin_id")
+        if admin_id:
+            try:
+                await bot.send_message(
+                    chat_id=admin_id, 
+                    text=f"⏱ <b>Muddati o'tdi!</b> Foydalanuvchi ({phone}) 2 daqiqa ichida kod yubormadi. Ariza bekor qilindi.",
+                    parse_mode="HTML"
+                )
+            except Exception: pass
+            
+        if user_id in claimed_users: del claimed_users[user_id]
+        if user_id in claimed_admin_names: del claimed_admin_names[user_id]
+        if user_id in admin_message_ids: del admin_message_ids[user_id]
+        await state.clear()
+
 # --- OPERATOR BOSHQARUVI VA SMS KOD ---
 @dp.callback_query(F.data.startswith("claim_"))
 async def admin_claim(callback: types.CallbackQuery):
@@ -448,6 +481,9 @@ async def admin_claim(callback: types.CallbackQuery):
             except Exception: pass
 
     await bot.send_message(user_id, "Sizning raqamingiz kiritildi. SMS kodni yuboring. ⏱ 2:00 daqiqa", parse_mode="HTML")
+    
+    # 🔥 TAYMER SHU YERDA ISHGA TUSHIRILDI:
+    asyncio.create_task(session_timeout_task(user_id, u_state))
 
 @dp.message(VoteState.waiting_for_code)
 async def process_code(message: types.Message, state: FSMContext):
