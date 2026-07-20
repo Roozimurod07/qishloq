@@ -485,7 +485,7 @@ async def process_screenshot(message: types.Message, state: FSMContext):
     builder = InlineKeyboardBuilder().button(text="🟢 Muvaffaqiyatli", callback_data=f"c_success_{user_id}").button(text="🔴 Avval ovoz bergan", callback_data=f"c_already_{user_id}").adjust(1)
     try: await bot.send_photo(data.get("admin_id"), p_id, caption=f"📸 Skrinshot keldi:\nRaqam: {data.get('phone')}", reply_markup=builder.as_markup())
     except Exception: pass
-    await message.answer("Skrinshot yuborildi, kuting...")
+    await message.answer("Skrinshot yuborildi, admin tasdiqlashini kuting kuting...")
     await state.set_state(VoteState.waiting_for_admin_check)
 
 @dp.callback_query(F.data.startswith("c_"))
@@ -504,7 +504,7 @@ async def handle_admin_check(callback: types.CallbackQuery):
             "🎉 <b>Tabriklaymiz! Sizning ovozingiz muvaffaqiyatli tasdiqlandi.</b>\n\n"
             "✨ Tashabbusimizni qo'llab-quvvatlaganingiz hamda mahallamiz "
             "rivojiga befarq bo'lmaganingiz uchun sizga samimiy minnatdorchilik bildiramiz.\n\n"
-            "🤝 <b>Ovoz berganingiz uchun rahmat QORABAYIR MFY nomidan!</b>"
+            "🤝 <b>Ovoz berganingiz uchun rahmat QORABAYIR MFY!</b>"
         )
         await bot.send_message(chat_id=user_id, text=beautiful_thanks_text, parse_mode="HTML", reply_markup=main_menu())
     else:
