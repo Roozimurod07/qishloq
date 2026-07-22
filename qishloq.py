@@ -16,7 +16,6 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 import gspread
 import openpyxl 
-import pandas as pd
 from oauth2client.service_account import ServiceAccountCredentials
 
 # --- SOZLAMALAR ---
@@ -26,10 +25,7 @@ SUPER_ADMINS = [8317043750]  # Super Adminlar
 GOOGLE_SHEET_NAME = "Qorabayir"  
 UZ_TZ = pytz.timezone('Asia/Tashkent')
 
-# --- RAILWAY PERSISTENT VOLUME UCHUN BAZA YO'LI ---
-# Railway'da Volume yo'lini /app/data deb belgilasangiz, baza o'chib ketmaydi.
-DATA_DIR = "/app/data" if os.path.exists("/app/data") else "."
-DB_PATH = os.path.join(DATA_DIR, "mailing_users.db")
+DB_PATH = "mailing_users.db"
 
 # --- LOGGING VA BOT INITIALIZATSIYASI ---
 logging.basicConfig(level=logging.INFO)
@@ -182,9 +178,17 @@ def get_google_sheet():
         creds = ServiceAccountCredentials.from_json_keyfile_name("open.json", scope)
     return gspread.authorize(creds).open(GOOGLE_SHEET_NAME).sheet1
 
-def _sync_log_to_sheets(user_id, full_name="", username="", phone="", code="", status="", admin_name=""):
-    """Fonda sinxron ravishda Google Sheets'ga yozuvchi yordamchi funksiya"""
+def _sync_log_to_sheets(payload):
+    """Google Sheets'ga haqiqiy yozish funksiyasi"""
     try:
+        user_id = payload.get("user_id")
+        full_name = payload.get("full_name", "")
+        username = payload.get("username", "")
+        phone = payload.get("phone", "")
+        code = payload.get("code", "")
+        status = payload.get("status", "")
+        admin_name = payload.get("admin_name", "")
+
         sheet = get_google_sheet()
         all_records = sheet.get_all_values()
         now = datetime.now(UZ_TZ).strftime("%Y-%m-%d %H:%M:%S")
@@ -192,7 +196,7 @@ def _sync_log_to_sheets(user_id, full_name="", username="", phone="", code="", s
         
         row_index = -1
         for idx, row in enumerate(all_records):
-            if len(row) >= 4 and row[0] == str(user_id) and row[3] == str(phone):
+            if len(row) >= 4 and str(row[0]) == str(user_id) and str(row[3]) == str(phone):
                 row_index = idx + 1
                 break
         
@@ -203,26 +207,30 @@ def _sync_log_to_sheets(user_id, full_name="", username="", phone="", code="", s
             if admin_name: sheet.update_cell(row_index, 8, admin_name)
         else:
             sheet.append_row([str(user_id), full_name, username_str, str(phone), str(code), status, now, admin_name])
-    except Exception as e: print(f"❌ Sheets xatolik: {e}")
+        print(f"✅ Sheets'ga muvaffaqiyatli yozildi: {phone} -> {status}")
+    except Exception as e:
+        print(f"❌ Google Sheets yozishda XATOLIK: {e}")
 
 async def sheets_worker():
-    """Google Sheets ma'lumotlarini fonda navbat bilan qotmasdan yozish tezlatgichi"""
+    """Fonda navbat bilan Google Sheets'ga yuboruvchi mexanizm"""
+    print("🚀 Google Sheets Workers fonda ishga tushdi...")
     while True:
-        data = await sheets_queue.get()
+        payload = await sheets_queue.get()
         try:
-            await asyncio.to_thread(_sync_log_to_sheets, **data)
+            await asyncio.to_thread(_sync_log_to_sheets, payload)
         except Exception as e:
-            print(f"❌ Worker xatoligi: {e}")
+            print(f"❌ Worker error: {e}")
         finally:
             sheets_queue.task_done()
-            await asyncio.sleep(0.5)  # Google API limitiga urilmaslik uchun kichik tanaffus
+            await asyncio.sleep(0.3)
 
 def log_to_sheets(user_id, full_name="", username="", phone="", code="", status="", admin_name=""):
-    """Botni qotirmasdan ma'lumotni fondagi navbatga tashlaydi"""
-    sheets_queue.put_nowait({
+    """Ma'lumotni darhol fondagi navbatga qo'shadi"""
+    payload = {
         "user_id": user_id, "full_name": full_name, "username": username,
         "phone": phone, "code": code, "status": status, "admin_name": admin_name
-    })
+    }
+    sheets_queue.put_nowait(payload)
 
 # --- FSM STATES ---
 class VoteState(StatesGroup):
@@ -564,7 +572,7 @@ async def process_screenshot(message: types.Message, state: FSMContext):
     builder = InlineKeyboardBuilder().button(text="🟢 Muvaffaqiyatli", callback_data=f"c_success_{user_id}").button(text="🔴 Avval ovoz bergan", callback_data=f"c_already_{user_id}").adjust(1)
     try: await bot.send_photo(data.get("admin_id"), p_id, caption=f"📸 Skrinshot keldi:\nRaqam: {data.get('phone')}", reply_markup=builder.as_markup())
     except Exception: pass
-    await message.answer("Skrinshot yuborildi, admin tasdiqlashini kuting kuting...")
+    await message.answer("Skrinshot yuborildi, admin tasdiqlashini kuting...")
     await state.set_state(VoteState.waiting_for_admin_check)
 
 @dp.callback_query(F.data.startswith("c_"))
@@ -605,7 +613,6 @@ async def handle_admin_check(callback: types.CallbackQuery):
     await u_state.clear()
 
 async def main():
-    # Google Sheets workerini ishga tushirish
     asyncio.create_task(sheets_worker())
     await dp.start_polling(bot)
 
