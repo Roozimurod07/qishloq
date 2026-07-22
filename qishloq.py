@@ -26,6 +26,11 @@ SUPER_ADMINS = [8317043750]  # Super Adminlar
 GOOGLE_SHEET_NAME = "Qorabayir"  
 UZ_TZ = pytz.timezone('Asia/Tashkent')
 
+# --- RAILWAY PERSISTENT VOLUME UCHUN BAZA YO'LI ---
+# Railway'da Volume yo'lini /app/data deb belgilasangiz, baza o'chib ketmaydi.
+DATA_DIR = "/app/data" if os.path.exists("/app/data") else "."
+DB_PATH = os.path.join(DATA_DIR, "mailing_users.db")
+
 # --- LOGGING VA BOT INITIALIZATSIYASI ---
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
@@ -35,9 +40,12 @@ claimed_users = {}
 claimed_admin_names = {}
 admin_message_ids = {}
 
+# --- ASYNC QUEUE (GOOGLE SHEETS NAVBATI) ---
+sheets_queue = asyncio.Queue()
+
 # --- SQLITE BAZA STRUKTURASI ---
 def init_db():
-    conn = sqlite3.connect("mailing_users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, joined_at TEXT)")
     cursor.execute("CREATE TABLE IF NOT EXISTS extra_admins (admin_id INTEGER PRIMARY KEY)")
@@ -45,21 +53,44 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('start_time', '07:00')")
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('end_time', '23:00')")
     cursor.execute("CREATE TABLE IF NOT EXISTS admin_stats (admin_id INTEGER, action_type TEXT, count INTEGER DEFAULT 0, PRIMARY KEY (admin_id, action_type))")
+    cursor.execute("CREATE TABLE IF NOT EXISTS voted_phones (phone TEXT PRIMARY KEY, status TEXT, added_at TEXT)")
     conn.commit()
     conn.close()
 
 # --- BAZA BILAN ISHLASH FUNKSIYALARI ---
 def add_user_to_db(user_id):
     try:
-        conn = sqlite3.connect("mailing_users.db")
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         now = datetime.now(UZ_TZ).strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("INSERT OR IGNORE INTO users (user_id, joined_at) VALUES (?, ?)", (user_id, now))
         conn.commit(); conn.close()
     except Exception as e: print(f"❌ SQLite xatolik: {e}")
 
+def is_phone_voted_local(phone):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT status FROM voted_phones WHERE phone = ?", (phone,))
+        row = cursor.fetchone()
+        conn.close()
+        return row is not None
+    except Exception as e:
+        print(f"❌ SQLite tekshiruvida xatolik: {e}")
+        return False
+
+def add_voted_phone_local(phone, status="Muvaffaqiyatli"):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        now = datetime.now(UZ_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("INSERT OR REPLACE INTO voted_phones (phone, status, added_at) VALUES (?, ?, ?)", (phone, status, now))
+        conn.commit(); conn.close()
+    except Exception as e:
+        print(f"❌ SQLite saqlashda xatolik: {e}")
+
 def get_all_db_users():
-    conn = sqlite3.connect("mailing_users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM users")
     users = [row[0] for row in cursor.fetchall()]
@@ -67,7 +98,7 @@ def get_all_db_users():
     return users
 
 def get_extra_admins():
-    conn = sqlite3.connect("mailing_users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT admin_id FROM extra_admins")
     admins = [row[0] for row in cursor.fetchall()]
@@ -75,21 +106,21 @@ def get_extra_admins():
     return admins
 
 def add_extra_admin(admin_id):
-    conn = sqlite3.connect("mailing_users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("INSERT OR IGNORE INTO extra_admins (admin_id) VALUES (?)", (admin_id,))
     conn.commit(); conn.close()
     return True
 
 def remove_extra_admin(admin_id):
-    conn = sqlite3.connect("mailing_users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("DELETE FROM extra_admins WHERE admin_id = ?", (admin_id,))
     conn.commit(); conn.close()
     return True
 
 def get_db_setting(key, default):
-    conn = sqlite3.connect("mailing_users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
     row = cursor.fetchone()
@@ -97,20 +128,20 @@ def get_db_setting(key, default):
     return row[0] if row else default
 
 def set_db_setting(key, value):
-    conn = sqlite3.connect("mailing_users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
     conn.commit(); conn.close()
     return True
 
 def increment_admin_stat(admin_id, action_type):
-    conn = sqlite3.connect("mailing_users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("INSERT INTO admin_stats (admin_id, action_type, count) VALUES (?, ?, 1) ON CONFLICT(admin_id, action_type) DO UPDATE SET count = count + 1", (admin_id, action_type))
     conn.commit(); conn.close()
 
 def get_admin_stats_text():
-    conn = sqlite3.connect("mailing_users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT admin_id, action_type, count FROM admin_stats")
     rows = cursor.fetchall()
@@ -151,7 +182,8 @@ def get_google_sheet():
         creds = ServiceAccountCredentials.from_json_keyfile_name("open.json", scope)
     return gspread.authorize(creds).open(GOOGLE_SHEET_NAME).sheet1
 
-def log_to_sheets(user_id, full_name="", username="", phone="", code="", status="", admin_name=""):
+def _sync_log_to_sheets(user_id, full_name="", username="", phone="", code="", status="", admin_name=""):
+    """Fonda sinxron ravishda Google Sheets'ga yozuvchi yordamchi funksiya"""
     try:
         sheet = get_google_sheet()
         all_records = sheet.get_all_values()
@@ -172,6 +204,25 @@ def log_to_sheets(user_id, full_name="", username="", phone="", code="", status=
         else:
             sheet.append_row([str(user_id), full_name, username_str, str(phone), str(code), status, now, admin_name])
     except Exception as e: print(f"❌ Sheets xatolik: {e}")
+
+async def sheets_worker():
+    """Google Sheets ma'lumotlarini fonda navbat bilan qotmasdan yozish tezlatgichi"""
+    while True:
+        data = await sheets_queue.get()
+        try:
+            await asyncio.to_thread(_sync_log_to_sheets, **data)
+        except Exception as e:
+            print(f"❌ Worker xatoligi: {e}")
+        finally:
+            sheets_queue.task_done()
+            await asyncio.sleep(0.5)  # Google API limitiga urilmaslik uchun kichik tanaffus
+
+def log_to_sheets(user_id, full_name="", username="", phone="", code="", status="", admin_name=""):
+    """Botni qotirmasdan ma'lumotni fondagi navbatga tashlaydi"""
+    sheets_queue.put_nowait({
+        "user_id": user_id, "full_name": full_name, "username": username,
+        "phone": phone, "code": code, "status": status, "admin_name": admin_name
+    })
 
 # --- FSM STATES ---
 class VoteState(StatesGroup):
@@ -249,7 +300,7 @@ async def show_detailed_stats(message: types.Message):
     waiting_msg = await message.answer("🔄 Statistika hisoblanmoqda...")
     try:
         db_users = len(get_all_db_users())
-        all_rows = get_google_sheet().get_all_values()[1:]
+        all_rows = await asyncio.to_thread(lambda: get_google_sheet().get_all_values()[1:])
         success = sum(1 for r in all_rows if len(r) >= 6 and "Muvaffaqiyatli" in r[5])
         rejected = sum(1 for r in all_rows if len(r) >= 6 and ("Avval" in r[5] or "rad" in r[5].lower()))
         
@@ -317,7 +368,7 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
     await state.clear()
     s_msg = await message.answer("📢 Tarqatish boshlandi...")
     sc, fc = 0, 0
-    all_users = get_google_sheet().get_all_values()[1:]
+    all_users = await asyncio.to_thread(lambda: get_google_sheet().get_all_values()[1:])
     
     target_users = set()
     for row in all_users:
@@ -341,7 +392,7 @@ async def send_excel_report(message: types.Message):
     if message.from_user.id not in SUPER_ADMINS: return
     waiting_msg = await message.answer("🔄 Yuklanmoqda...")
     try:
-        all_data = get_google_sheet().get_all_values()
+        all_data = await asyncio.to_thread(lambda: get_google_sheet().get_all_values())
         wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Hisobot"
         for row in all_data: ws.append(row)
         buf = io.BytesIO(); wb.save(buf); buf.seek(0)
@@ -352,7 +403,6 @@ async def send_excel_report(message: types.Message):
 @dp.message(F.text == "🙋‍♂️ Yordam")
 async def process_help(message: types.Message):
     await message.answer("<b>🙋‍♂️ Yordam markazi:</b>", parse_mode="HTML", reply_markup=InlineKeyboardBuilder().button(text="✍️ Operator", url="https://t.me/soibnazarov07").as_markup())
-
 
 # =====================================================================
 # 🔥 OVOZ BERISH JARAYONI 🔥
@@ -396,14 +446,10 @@ async def process_phone(message: types.Message, state: FSMContext):
     if not re.match(r"^\+998\d{9}$", phone):
         await message.answer("⚠️ Noto'g'ri format. Qayta kiriting:"); return
 
-    try:
-        all_records = get_google_sheet().get_all_values()
-        for row in all_records:
-            if len(row) >= 4 and row[3] == str(phone):
-                if row[5] in ["Admin qabul qildi", "Kod kiritildi", "Kod tasdiqlandi", "Skrinshot keldi", "Muvaffaqiyatli"]:
-                    await message.answer("❌ Ushbu raqamdan avval ovoz berilgan yoki jarayon yakunlanmagan!", reply_markup=main_menu())
-                    await state.clear(); return
-    except Exception as e: print(f"Sheets tekshirishda xato: {e}")
+    if is_phone_voted_local(phone):
+        await message.answer("❌ Ushbu raqamdan avval ovoz berilgan yoki jarayon yakunlanmagan!", reply_markup=main_menu())
+        await state.clear()
+        return
 
     user_id, username = message.from_user.id, message.from_user.username
     data = await state.get_data()
@@ -421,16 +467,15 @@ async def process_phone(message: types.Message, state: FSMContext):
         except Exception: pass
     await message.answer("Raqamingiz qabul qilindi. Operatorlar ko'rib chiqmoqda...")
 
-# --- 🔥 YANGI QO'SHILGAN BACKGROUND TAYMER FUNKSIYASI 🔥 ---
+# --- BACKGROUND TAYMER FUNKSIYASI ---
 async def session_timeout_task(user_id: int, state: FSMContext):
-    await asyncio.sleep(120)  # 2 daqiqa (120 soniya) fonda kutadi
+    await asyncio.sleep(120)  # 2 daqiqa
     current_state = await state.get_state()
     
     if current_state == VoteState.waiting_for_code:
         data = await state.get_data()
         phone = data.get("phone")
         
-        # Google Sheets ga statusni "Muddati o'tdi (Timeout)" deb yozish
         log_to_sheets(user_id=user_id, phone=phone, status="Muddati o'tdi (Timeout)", admin_name=claimed_admin_names.get(user_id))
         
         try:
@@ -481,8 +526,6 @@ async def admin_claim(callback: types.CallbackQuery):
             except Exception: pass
 
     await bot.send_message(user_id, "Sizning raqamingiz kiritildi. SMS kodni yuboring. ⏱ 2:00 daqiqa", parse_mode="HTML")
-    
-    # 🔥 TAYMER SHU YERDA ISHGA TUSHIRILDI:
     asyncio.create_task(session_timeout_task(user_id, u_state))
 
 @dp.message(VoteState.waiting_for_code)
@@ -530,9 +573,13 @@ async def handle_admin_check(callback: types.CallbackQuery):
     user_id = int(user_id)
     u_state = dp.fsm.resolve_context(bot, chat_id=user_id, user_id=user_id)
     data = await u_state.get_data()
+    phone = data.get("phone")
 
     if action == "success":
-        log_to_sheets(user_id=user_id, phone=data.get("phone"), status="Muvaffaqiyatli", admin_name=callback.from_user.full_name)
+        if phone:
+            add_voted_phone_local(phone, status="Muvaffaqiyatli")
+
+        log_to_sheets(user_id=user_id, phone=phone, status="Muvaffaqiyatli", admin_name=callback.from_user.full_name)
         increment_admin_stat(callback.from_user.id, 'success')
         await callback.message.edit_caption(caption="✅ Tasdiqlandi!")
         
@@ -544,7 +591,10 @@ async def handle_admin_check(callback: types.CallbackQuery):
         )
         await bot.send_message(chat_id=user_id, text=beautiful_thanks_text, parse_mode="HTML", reply_markup=main_menu())
     else:
-        log_to_sheets(user_id=user_id, phone=data.get("phone"), status="Avval ovoz bergan", admin_name=callback.from_user.full_name)
+        if phone:
+            add_voted_phone_local(phone, status="Avval ovoz bergan")
+
+        log_to_sheets(user_id=user_id, phone=phone, status="Avval ovoz bergan", admin_name=callback.from_user.full_name)
         increment_admin_stat(callback.from_user.id, 'already')
         await callback.message.edit_caption(caption="❌ Rad etildi (Avval ovoz bergan)")
         await bot.send_message(user_id, "Uzr, bu raqamdan avval foydalanilgan.", reply_markup=main_menu())
@@ -554,5 +604,10 @@ async def handle_admin_check(callback: types.CallbackQuery):
     if user_id in admin_message_ids: del admin_message_ids[user_id]
     await u_state.clear()
 
-async def main(): await dp.start_polling(bot)
-if __name__ == "__main__": asyncio.run(main())
+async def main():
+    # Google Sheets workerini ishga tushirish
+    asyncio.create_task(sheets_worker())
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
