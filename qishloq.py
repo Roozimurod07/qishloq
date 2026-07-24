@@ -20,7 +20,8 @@ import pandas as pd
 from oauth2client.service_account import ServiceAccountCredentials
 
 # --- SOZLAMALAR ---
-BOT_TOKEN = "8867325304:AAFHOVKs8HsR8z02tSL8NcUeXmLZlPKCzNQ"
+# ✅ Token Railway Environment Variables bo'limidan olinadi
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPER_ADMINS = [8317043750]  # Super Adminlar
 
 GOOGLE_SHEET_NAME = "Qorabayir"  
