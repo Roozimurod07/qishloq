@@ -27,6 +27,11 @@ SUPER_ADMINS = [8317043750]  # Super Adminlar
 GOOGLE_SHEET_NAME = "Qorabayir"  
 UZ_TZ = pytz.timezone('Asia/Tashkent')
 
+# --- MOUNT PATH (VOLUME) SOZLAMALARI ---
+DATA_DIR = "/app/data"
+os.makedirs(DATA_DIR, exist_ok=True)
+DB_PATH = os.path.join(DATA_DIR, "mailing_users.db")
+
 # --- LOGGING VA BOT INITIALIZATSIYASI ---
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
@@ -38,7 +43,7 @@ admin_message_ids = {}
 
 # --- SQLITE BAZA STRUKTURASI ---
 def init_db():
-    conn = sqlite3.connect("mailing_users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, joined_at TEXT)")
     cursor.execute("CREATE TABLE IF NOT EXISTS extra_admins (admin_id INTEGER PRIMARY KEY)")
@@ -52,7 +57,7 @@ def init_db():
 # --- BAZA BILAN ISHLASH FUNKSIYALARI ---
 def add_user_to_db(user_id):
     try:
-        conn = sqlite3.connect("mailing_users.db")
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         now = datetime.now(UZ_TZ).strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("INSERT OR IGNORE INTO users (user_id, joined_at) VALUES (?, ?)", (user_id, now))
@@ -60,7 +65,7 @@ def add_user_to_db(user_id):
     except Exception as e: print(f"❌ SQLite xatolik: {e}")
 
 def get_all_db_users():
-    conn = sqlite3.connect("mailing_users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM users")
     users = [row[0] for row in cursor.fetchall()]
@@ -68,7 +73,7 @@ def get_all_db_users():
     return users
 
 def get_extra_admins():
-    conn = sqlite3.connect("mailing_users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT admin_id FROM extra_admins")
     admins = [row[0] for row in cursor.fetchall()]
@@ -76,21 +81,21 @@ def get_extra_admins():
     return admins
 
 def add_extra_admin(admin_id):
-    conn = sqlite3.connect("mailing_users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("INSERT OR IGNORE INTO extra_admins (admin_id) VALUES (?)", (admin_id,))
     conn.commit(); conn.close()
     return True
 
 def remove_extra_admin(admin_id):
-    conn = sqlite3.connect("mailing_users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("DELETE FROM extra_admins WHERE admin_id = ?", (admin_id,))
     conn.commit(); conn.close()
     return True
 
 def get_db_setting(key, default):
-    conn = sqlite3.connect("mailing_users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
     row = cursor.fetchone()
@@ -98,20 +103,20 @@ def get_db_setting(key, default):
     return row[0] if row else default
 
 def set_db_setting(key, value):
-    conn = sqlite3.connect("mailing_users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
     conn.commit(); conn.close()
     return True
 
 def increment_admin_stat(admin_id, action_type):
-    conn = sqlite3.connect("mailing_users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("INSERT INTO admin_stats (admin_id, action_type, count) VALUES (?, ?, 1) ON CONFLICT(admin_id, action_type) DO UPDATE SET count = count + 1", (admin_id, action_type))
     conn.commit(); conn.close()
 
 def get_admin_stats_text():
-    conn = sqlite3.connect("mailing_users.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT admin_id, action_type, count FROM admin_stats")
     rows = cursor.fetchall()
@@ -149,7 +154,8 @@ def get_google_sheet():
     if google_creds_env:
         creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(google_creds_env), scope)
     else:
-        creds = ServiceAccountCredentials.from_json_keyfile_name("open.json", scope)
+        creds_file = os.path.join(DATA_DIR, "open.json") if os.path.exists(os.path.join(DATA_DIR, "open.json")) else "open.json"
+        creds = ServiceAccountCredentials.from_json_keyfile_name(creds_file, scope)
     return gspread.authorize(creds).open(GOOGLE_SHEET_NAME).sheet1
 
 def log_to_sheets(user_id, full_name="", username="", phone="", code="", status="", admin_name=""):
