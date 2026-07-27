@@ -40,7 +40,10 @@ claimed_users = {}
 claimed_admin_names = {}
 admin_message_ids = {}
 
-# 🔥 TEZKOR KESH (RAM) - Google Sheets'ni har safar o'qimaslik uchun
+# 🔥 Adminlar bir vaqtda bosganda chalkashmasligi uchun LOCK
+claim_lock = asyncio.Lock()
+
+# TEZKOR KESH (RAM)
 used_phones_cache = set()
 sheets_queue = asyncio.Queue()
 sheet_instance = None
@@ -157,7 +160,7 @@ def is_working_hours():
     if start_time <= end_time: return start_time <= now_uz <= end_time
     return now_uz >= start_time or now_uz <= end_time
 
-# --- 🔥 ULTRA-FAST GOOGLE SHEETS WORKER (BACKGROUND QUEUE) ---
+# --- GOOGLE SHEETS WORKER ---
 def init_sheets_sync():
     global sheet_instance
     try:
@@ -171,7 +174,6 @@ def init_sheets_sync():
         client = gspread.authorize(creds)
         sheet_instance = client.open(GOOGLE_SHEET_NAME).sheet1
         
-        # RAM Keshni to'ldirish
         records = sheet_instance.get_all_values()
         for row in records[1:]:
             if len(row) >= 4 and row[3]:
@@ -182,7 +184,6 @@ def init_sheets_sync():
         logging.error(f"❌ Sheets ulanishda xato: {e}")
 
 async def sheets_worker():
-    """Botni umuman sekinlashtirmasdan orqa fonda Google Sheets'ga yozib boradi"""
     while True:
         task = await sheets_queue.get()
         try:
@@ -440,7 +441,6 @@ async def process_phone(message: types.Message, state: FSMContext):
     if not re.match(r"^\+998\d{9}$", phone):
         await message.answer("⚠️ Noto'g'ri format. Qayta kiriting:"); return
 
-    # 🔥 XOTIRADAN (RAM) ONLAYN TEKSHIRISH (0.001 sekund)
     if phone in used_phones_cache:
         await message.answer("❌ Ushbu raqamdan avval ovoz berilgan yoki jarayon yakunlanmagan!", reply_markup=main_menu())
         await state.clear(); return
@@ -452,7 +452,6 @@ async def process_phone(message: types.Message, state: FSMContext):
     await state.update_data(phone=phone, username=username)
     used_phones_cache.add(phone)
 
-    # Sheets'ga yozish navbatga qo'yildi (Bot to'xtamaydi)
     queue_sheets_log(user_id=user_id, full_name=full_name, username=username, phone=phone, status="Raqam kiritildi")
 
     builder = InlineKeyboardBuilder().button(text="✅ Qabul qilish (Band qilish)", callback_data=f"claim_{user_id}")
@@ -507,10 +506,16 @@ async def session_timeout_task(user_id: int, state: FSMContext):
 async def admin_claim(callback: types.CallbackQuery):
     user_id = int(callback.data.split("_")[1])
     admin_id, admin_name = callback.from_user.id, callback.from_user.full_name
-    if user_id in claimed_users:
-        await callback.answer("❌ Kech qoldingiz! Band qilingan.", show_alert=True); return
 
-    claimed_users[user_id] = admin_id; claimed_admin_names[user_id] = admin_name
+    # 🔥 FAQAT SHU YERGA LOCK QO'SHILDI: Bir vaqtda bir nechta admin tugmani bossa chalkashlik bo'lmaydi
+    async with claim_lock:
+        if user_id in claimed_users:
+            await callback.answer("❌ Kech qoldingiz! Ushbu raqam allaqachon boshqa operator tomonidan qabul qilingan.", show_alert=True)
+            return
+
+        claimed_users[user_id] = admin_id
+        claimed_admin_names[user_id] = admin_name
+
     increment_admin_stat(admin_id, 'claim')
     
     u_state = dp.fsm.resolve_context(bot, chat_id=user_id, user_id=user_id)
