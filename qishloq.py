@@ -20,7 +20,6 @@ import pandas as pd
 from oauth2client.service_account import ServiceAccountCredentials
 
 # --- SOZLAMALAR ---
-# ✅ Token Railway Environment Variables bo'limidan olinadi
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPER_ADMINS = [8317043750]  # Super Adminlar
 
@@ -41,9 +40,14 @@ claimed_users = {}
 claimed_admin_names = {}
 admin_message_ids = {}
 
-# --- SQLITE BAZA STRUKTURASI ---
+# --- OPTIMIZATSIYA QILINGAN SQLITE BAZA ---
+def get_db_connection():
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL;")  # Tezlik va parallel ishlash uchun
+    return conn
+
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, joined_at TEXT)")
     cursor.execute("CREATE TABLE IF NOT EXISTS extra_admins (admin_id INTEGER PRIMARY KEY)")
@@ -51,13 +55,15 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('start_time', '07:00')")
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('end_time', '23:00')")
     cursor.execute("CREATE TABLE IF NOT EXISTS admin_stats (admin_id INTEGER, action_type TEXT, count INTEGER DEFAULT 0, PRIMARY KEY (admin_id, action_type))")
+    
+    # Tezroq qidirish uchun indekslar
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_id ON users(user_id)")
     conn.commit()
     conn.close()
 
-# --- BAZA BILAN ISHLASH FUNKSIYALARI ---
 def add_user_to_db(user_id):
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_db_connection()
         cursor = conn.cursor()
         now = datetime.now(UZ_TZ).strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("INSERT OR IGNORE INTO users (user_id, joined_at) VALUES (?, ?)", (user_id, now))
@@ -65,7 +71,7 @@ def add_user_to_db(user_id):
     except Exception as e: print(f"❌ SQLite xatolik: {e}")
 
 def get_all_db_users():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM users")
     users = [row[0] for row in cursor.fetchall()]
@@ -73,7 +79,7 @@ def get_all_db_users():
     return users
 
 def get_extra_admins():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT admin_id FROM extra_admins")
     admins = [row[0] for row in cursor.fetchall()]
@@ -81,21 +87,21 @@ def get_extra_admins():
     return admins
 
 def add_extra_admin(admin_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("INSERT OR IGNORE INTO extra_admins (admin_id) VALUES (?)", (admin_id,))
     conn.commit(); conn.close()
     return True
 
 def remove_extra_admin(admin_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM extra_admins WHERE admin_id = ?", (admin_id,))
     conn.commit(); conn.close()
     return True
 
 def get_db_setting(key, default):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
     row = cursor.fetchone()
@@ -103,20 +109,20 @@ def get_db_setting(key, default):
     return row[0] if row else default
 
 def set_db_setting(key, value):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
     conn.commit(); conn.close()
     return True
 
 def increment_admin_stat(admin_id, action_type):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("INSERT INTO admin_stats (admin_id, action_type, count) VALUES (?, ?, 1) ON CONFLICT(admin_id, action_type) DO UPDATE SET count = count + 1", (admin_id, action_type))
     conn.commit(); conn.close()
 
 def get_admin_stats_text():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT admin_id, action_type, count FROM admin_stats")
     rows = cursor.fetchall()
@@ -147,8 +153,8 @@ def is_working_hours():
     if start_time <= end_time: return start_time <= now_uz <= end_time
     return now_uz >= start_time or now_uz <= end_time
 
-# --- GOOGLE SHEETS ---
-def get_google_sheet():
+# --- ASINXRON GOOGLE SHEETS ISHLASH (TEZLASH TIRISHLANGAN) ---
+def _get_google_sheet_sync():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     google_creds_env = os.getenv("GOOGLE_CREDS")
     if google_creds_env:
@@ -158,9 +164,9 @@ def get_google_sheet():
         creds = ServiceAccountCredentials.from_json_keyfile_name(creds_file, scope)
     return gspread.authorize(creds).open(GOOGLE_SHEET_NAME).sheet1
 
-def log_to_sheets(user_id, full_name="", username="", phone="", code="", status="", admin_name=""):
+def _log_to_sheets_sync(user_id, full_name="", username="", phone="", code="", status="", admin_name=""):
     try:
-        sheet = get_google_sheet()
+        sheet = _get_google_sheet_sync()
         all_records = sheet.get_all_values()
         now = datetime.now(UZ_TZ).strftime("%Y-%m-%d %H:%M:%S")
         username_str = f"@{username}" if username else "Mavjud emas"
@@ -179,6 +185,13 @@ def log_to_sheets(user_id, full_name="", username="", phone="", code="", status=
         else:
             sheet.append_row([str(user_id), full_name, username_str, str(phone), str(code), status, now, admin_name])
     except Exception as e: print(f"❌ Sheets xatolik: {e}")
+
+async def async_log_to_sheets(user_id, full_name="", username="", phone="", code="", status="", admin_name=""):
+    await asyncio.to_thread(_log_to_sheets_sync, user_id, full_name, username, phone, code, status, admin_name)
+
+async def async_get_sheet_values():
+    sheet = await asyncio.to_thread(_get_google_sheet_sync)
+    return await asyncio.to_thread(sheet.get_all_values)
 
 # --- FSM STATES ---
 class VoteState(StatesGroup):
@@ -256,7 +269,8 @@ async def show_detailed_stats(message: types.Message):
     waiting_msg = await message.answer("🔄 Statistika hisoblanmoqda...")
     try:
         db_users = len(get_all_db_users())
-        all_rows = get_google_sheet().get_all_values()[1:]
+        all_values = await async_get_sheet_values()
+        all_rows = all_values[1:]
         success = sum(1 for r in all_rows if len(r) >= 6 and "Muvaffaqiyatli" in r[5])
         rejected = sum(1 for r in all_rows if len(r) >= 6 and ("Avval" in r[5] or "rad" in r[5].lower()))
         
@@ -324,10 +338,11 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
     await state.clear()
     s_msg = await message.answer("📢 Tarqatish boshlandi...")
     sc, fc = 0, 0
-    all_users = get_google_sheet().get_all_values()[1:]
+    all_users = await async_get_sheet_values()
+    all_rows = all_users[1:]
     
     target_users = set()
-    for row in all_users:
+    for row in all_rows:
         if row and row[0].isdigit():
             target_users.add(int(row[0]))
             
@@ -337,18 +352,18 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
     for u_id in target_users:
         try:
             await bot.send_message(chat_id=u_id, text=message.text)
-            sc += 1; await asyncio.sleep(0.05)
+            sc += 1; await asyncio.sleep(0.03)  # Tezroq tarqatish
         except Exception: 
             fc += 1
             
-    await s_msg.edit_text(f"✅ Tugadi.\n🟢 Yetkazildi (Adminlar va foydalanuvchilar): {sc}\n🔴 Yetkazilmadi: {fc}")
+    await s_msg.edit_text(f"✅ Tugadi.\n🟢 Yetkazildi: {sc}\n🔴 Yetkazilmadi: {fc}")
 
 @dp.message(F.text == "📥 Excel Hisobot (.xlsx)")
 async def send_excel_report(message: types.Message):
     if message.from_user.id not in SUPER_ADMINS: return
     waiting_msg = await message.answer("🔄 Yuklanmoqda...")
     try:
-        all_data = get_google_sheet().get_all_values()
+        all_data = await async_get_sheet_values()
         wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Hisobot"
         for row in all_data: ws.append(row)
         buf = io.BytesIO(); wb.save(buf); buf.seek(0)
@@ -404,7 +419,7 @@ async def process_phone(message: types.Message, state: FSMContext):
         await message.answer("⚠️ Noto'g'ri format. Qayta kiriting:"); return
 
     try:
-        all_records = get_google_sheet().get_all_values()
+        all_records = await async_get_sheet_values()
         for row in all_records:
             if len(row) >= 4 and row[3] == str(phone):
                 if row[5] in ["Admin qabul qildi", "Kod kiritildi", "Kod tasdiqlandi", "Skrinshot keldi", "Muvaffaqiyatli"]:
@@ -417,28 +432,33 @@ async def process_phone(message: types.Message, state: FSMContext):
     full_name = data.get("full_name")  
 
     await state.update_data(phone=phone, username=username)
-    log_to_sheets(user_id=user_id, full_name=full_name, username=username, phone=phone, status="Raqam kiritildi")
+    
+    # Sheets yozishni fonga o'tkazamiz (bot to'xtab qolmaydi)
+    asyncio.create_task(async_log_to_sheets(user_id=user_id, full_name=full_name, username=username, phone=phone, status="Raqam kiritildi"))
 
     builder = InlineKeyboardBuilder().button(text="✅ Qabul qilish (Band qilish)", callback_data=f"claim_{user_id}")
     admin_message_ids[user_id] = {}
-    for admin in get_all_admins():
+    
+    # Barcha adminlarga tezkor parallel xabar yuborish
+    async def send_to_admin(admin):
         try:
             msg = await bot.send_message(admin, f"📱 <b>Yangi raqam:</b>\n👤 Foydalanuvchi: {full_name}\n📞 Raqam: {phone}", parse_mode="HTML", reply_markup=builder.as_markup())
             admin_message_ids[user_id][admin] = msg.message_id
         except Exception: pass
+
+    await asyncio.gather(*[send_to_admin(a) for a in get_all_admins()])
     await message.answer("Raqamingiz qabul qilindi. Operatorlar ko'rib chiqmoqda...")
 
-# --- 🔥 YANGI QO'SHILGAN BACKGROUND TAYMER FUNKSIYASI 🔥 ---
+# --- BACKGROUND TAYMER FUNKSIYASI ---
 async def session_timeout_task(user_id: int, state: FSMContext):
-    await asyncio.sleep(120)  # 2 daqiqa (120 soniya) fonda kutadi
+    await asyncio.sleep(120)  # 2 daqiqa
     current_state = await state.get_state()
     
     if current_state == VoteState.waiting_for_code:
         data = await state.get_data()
         phone = data.get("phone")
         
-        # Google Sheets ga statusni "Muddati o'tdi (Timeout)" deb yozish
-        log_to_sheets(user_id=user_id, phone=phone, status="Muddati o'tdi (Timeout)", admin_name=claimed_admin_names.get(user_id))
+        asyncio.create_task(async_log_to_sheets(user_id=user_id, phone=phone, status="Muddati o'tdi (Timeout)", admin_name=claimed_admin_names.get(user_id)))
         
         try:
             await bot.send_message(
@@ -480,23 +500,22 @@ async def admin_claim(callback: types.CallbackQuery):
     await u_state.update_data(admin_id=admin_id)
     u_data = await u_state.get_data()
 
-    log_to_sheets(user_id=user_id, phone=u_data.get("phone"), status="Admin qabul qildi", admin_name=admin_name)
+    asyncio.create_task(async_log_to_sheets(user_id=user_id, phone=u_data.get("phone"), status="Admin qabul qildi", admin_name=admin_name))
     
     if user_id in admin_message_ids:
-        for a_id, m_id in admin_message_ids[user_id].items():
+        async def edit_msg(a_id, m_id):
             try: await bot.edit_message_text(text=f"📱 Raqam keldi\n🔒 <b>[{admin_name}] qabul qildi!</b>", chat_id=a_id, message_id=m_id, parse_mode="HTML")
             except Exception: pass
+        await asyncio.gather(*[edit_msg(a_id, m_id) for a_id, m_id in admin_message_ids[user_id].items()])
 
     await bot.send_message(user_id, "Sizning raqamingiz kiritildi. SMS kodni yuboring. ⏱ 2:00 daqiqa", parse_mode="HTML")
-    
-    # 🔥 TAYMER SHU YERDA ISHGA TUSHIRILDI:
     asyncio.create_task(session_timeout_task(user_id, u_state))
 
 @dp.message(VoteState.waiting_for_code)
 async def process_code(message: types.Message, state: FSMContext):
     code = message.text; data = await state.get_data(); user_id = message.from_user.id
     await state.update_data(code=code)
-    log_to_sheets(user_id=user_id, phone=data.get("phone"), code=code, status="Kod kiritildi", admin_name=claimed_admin_names.get(user_id))
+    asyncio.create_task(async_log_to_sheets(user_id=user_id, phone=data.get("phone"), code=code, status="Kod kiritildi", admin_name=claimed_admin_names.get(user_id)))
 
     verify_kb = InlineKeyboardBuilder().button(text="✅ To'g'ri", callback_data=f"v_correct_{user_id}").button(text="❌ Xato", callback_data=f"v_wrong_{user_id}").adjust(2)
     try: await bot.send_message(data.get("admin_id"), f"🔢 Kod keldi: <code>{code}</code>\nTelefon: {data.get('phone')}", parse_mode="HTML", reply_markup=verify_kb.as_markup())
@@ -511,11 +530,11 @@ async def handle_code_verification(callback: types.CallbackQuery):
     data = await u_state.get_data()
 
     if status == "correct":
-        log_to_sheets(user_id=user_id, phone=data.get("phone"), status="Kod tasdiqlandi", admin_name=callback.from_user.full_name)
+        asyncio.create_task(async_log_to_sheets(user_id=user_id, phone=data.get("phone"), status="Kod tasdiqlandi", admin_name=callback.from_user.full_name))
         await callback.message.edit_text("🟢 Kod to'g'ri deb belgilandi."); await u_state.set_state(VoteState.waiting_for_screenshot)
         await bot.send_message(user_id, "🎉 Kod tasdiqlandi. 1 soat ichida sizga ovozingiz tasdiqlanganlik haqida SMS xabar boradi. O'shani skrinshot qilib yuboring! 📸")
     else:
-        log_to_sheets(user_id=user_id, phone=data.get("phone"), status="Kod xato", admin_name=callback.from_user.full_name)
+        asyncio.create_task(async_log_to_sheets(user_id=user_id, phone=data.get("phone"), status="Kod xato", admin_name=callback.from_user.full_name))
         await callback.message.edit_text("🔴 Kod xato deb belgilandi.")
         await bot.send_message(user_id, "⚠️ Kod rad etildi. To'g'ri kodni qayta kiriting.")
 
@@ -523,7 +542,7 @@ async def handle_code_verification(callback: types.CallbackQuery):
 @dp.message(VoteState.waiting_for_screenshot, F.photo)
 async def process_screenshot(message: types.Message, state: FSMContext):
     p_id = message.photo[-1].file_id; data = await state.get_data(); user_id = message.from_user.id
-    log_to_sheets(user_id=user_id, phone=data.get("phone"), status="Skrinshot keldi", admin_name=claimed_admin_names.get(user_id))
+    asyncio.create_task(async_log_to_sheets(user_id=user_id, phone=data.get("phone"), status="Skrinshot keldi", admin_name=claimed_admin_names.get(user_id)))
 
     builder = InlineKeyboardBuilder().button(text="🟢 Muvaffaqiyatli", callback_data=f"c_success_{user_id}").button(text="🔴 Avval ovoz bergan", callback_data=f"c_already_{user_id}").adjust(1)
     try: await bot.send_photo(data.get("admin_id"), p_id, caption=f"📸 Skrinshot keldi:\nRaqam: {data.get('phone')}", reply_markup=builder.as_markup())
@@ -539,7 +558,7 @@ async def handle_admin_check(callback: types.CallbackQuery):
     data = await u_state.get_data()
 
     if action == "success":
-        log_to_sheets(user_id=user_id, phone=data.get("phone"), status="Muvaffaqiyatli", admin_name=callback.from_user.full_name)
+        asyncio.create_task(async_log_to_sheets(user_id=user_id, phone=data.get("phone"), status="Muvaffaqiyatli", admin_name=callback.from_user.full_name))
         increment_admin_stat(callback.from_user.id, 'success')
         await callback.message.edit_caption(caption="✅ Tasdiqlandi!")
         
@@ -551,7 +570,7 @@ async def handle_admin_check(callback: types.CallbackQuery):
         )
         await bot.send_message(chat_id=user_id, text=beautiful_thanks_text, parse_mode="HTML", reply_markup=main_menu())
     else:
-        log_to_sheets(user_id=user_id, phone=data.get("phone"), status="Avval ovoz bergan", admin_name=callback.from_user.full_name)
+        asyncio.create_task(async_log_to_sheets(user_id=user_id, phone=data.get("phone"), status="Avval ovoz bergan", admin_name=callback.from_user.full_name))
         increment_admin_stat(callback.from_user.id, 'already')
         await callback.message.edit_caption(caption="❌ Rad etildi (Avval ovoz bergan)")
         await bot.send_message(user_id, "Uzr, bu raqamdan avval foydalanilgan.", reply_markup=main_menu())
