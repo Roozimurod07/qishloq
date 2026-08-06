@@ -340,15 +340,24 @@ async def cmd_find_phone(message: types.Message):
         await message.answer("⚠️ Iltimos, raqamni kiriting. Masalan: <code>/find 998901234567</code>", parse_mode="HTML")
         return
         
-    phone_query = parts[1].strip().replace(" ", "")
-    if re.match(r"^998\d{9}$", phone_query): phone_query = "+" + phone_query
-    elif re.match(r"^\d{9}$", phone_query): phone_query = "+998" + phone_query
+    raw_query = parts[1].strip()
+    digits_query = re.sub(r'\D', '', raw_query)
+    
+    if not digits_query:
+        await message.answer("⚠️ Noto'g'ri raqam kiritildi.")
+        return
 
     waiting_msg = await message.answer("🔄 Qidirilmoqda...")
     try:
         all_rows = await asyncio.to_thread(sheet_instance.get_all_values)
         all_rows = all_rows[1:]
-        found_rows = [r for r in all_rows if len(r) >= 4 and phone_query in r[3]]
+        
+        found_rows = []
+        for r in all_rows:
+            if len(r) > 3 and r[3]:
+                sheet_phone_digits = re.sub(r'\D', '', str(r[3]))
+                if digits_query in sheet_phone_digits or sheet_phone_digits.endswith(digits_query):
+                    found_rows.append(r)
 
         if not found_rows:
             await waiting_msg.edit_text("❌ Ushbu telefon raqam bo'yicha hech qanday ma'lumot topilmadi.")
@@ -377,7 +386,8 @@ async def cmd_find_phone(message: types.Message):
             )
         await waiting_msg.delete()
         await message.answer(text, parse_mode="HTML")
-    except Exception as e: await waiting_msg.edit_text(f"❌ Qidiruvda xatolik: {e}")
+    except Exception as e: 
+        await waiting_msg.edit_text(f"❌ Qidiruvda xatolik: {e}")
 
 @dp.message(F.text == "⚙️ Ish Vaqtini Sozlash")
 async def set_hours_start(message: types.Message, state: FSMContext):
