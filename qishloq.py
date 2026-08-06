@@ -197,17 +197,17 @@ def _process_sheet_task(task):
     now = datetime.now(UZ_TZ).strftime("%Y-%m-%d %H:%M:%S")
     username_str = f"@{username}" if username else "Mavjud emas"
     
-    clean_phone = phone.strip().replace(" ", "") if phone else ""
+    clean_phone = re.sub(r'\D', '', str(phone)) if phone else ""
     row_index = -1
 
-    # 🔍 Ayni shu user_id va AYNAN O'SHA TELEFON RAQAM mos keladigan qatorni qidiramiz
+    # 🔍 Ayni shu user_id va AYNAN O'SHA TELEFON RAQAM (belgilarsiz) mos keladigan qatorni qidiramiz
     if user_id and clean_phone:
         for idx in range(len(all_records) - 1, 0, -1):
             row = all_records[idx]
             if len(row) > 3:
                 r_uid = str(row[0]).strip()
-                r_phone = str(row[3]).strip().replace(" ", "")
-                if r_uid == str(user_id) and r_phone == clean_phone:
+                r_phone_clean = re.sub(r'\D', '', str(row[3]))
+                if r_uid == str(user_id) and r_phone_clean == clean_phone:
                     row_index = idx + 1
                     break
 
