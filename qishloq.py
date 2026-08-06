@@ -197,29 +197,29 @@ def _process_sheet_task(task):
     now = datetime.now(UZ_TZ).strftime("%Y-%m-%d %H:%M:%S")
     username_str = f"@{username}" if username else "Mavjud emas"
     
-    clean_phone = phone.strip().replace(" ", "") if phone else ""
     row_index = -1
 
-    # Telefon raqam bo'yicha jadvaldan oxirgi mos qatorni qidiramiz
-    if clean_phone:
+    # 🔍 Faqat user_id (A ustun) bo'yicha jadvaldan oxirgi mos qatorni qidiramiz
+    if user_id:
         for idx in range(len(all_records) - 1, 0, -1):
             row = all_records[idx]
-            if len(row) > 3 and clean_phone == str(row[3]).strip().replace(" ", ""):
+            if len(row) > 0 and str(row[0]).strip() == str(user_id):
                 row_index = idx + 1
                 break  # Topilgach, faqat o'sha qatorni yangilash uchun to'xtaymiz
 
-    # Agar o'sha raqamga tegishli qator topilsa - H ustunidan o'tmagan holda faqat o'sha qatorni tahrirlaymiz
+    # Agar o'sha user_id ga tegishli qator topilsa - H ustunidan o'tmagan holda faqat o'sha qatorni tahrirlaymiz
     if row_index != -1:
         if user_id: sheet_instance.update_cell(row_index, 1, str(user_id))          # A
         if full_name: sheet_instance.update_cell(row_index, 2, str(full_name))      # B
         if username_str: sheet_instance.update_cell(row_index, 3, str(username_str))  # C
         if phone: sheet_instance.update_cell(row_index, 4, str(phone))              # D
-        if code is not None: sheet_instance.update_cell(row_index, 5, str(code))    # E
+        if code is not None and str(code).strip() != "": 
+            sheet_instance.update_cell(row_index, 5, str(code))                     # E
         if status: sheet_instance.update_cell(row_index, 6, str(status))            # F
         sheet_instance.update_cell(row_index, 7, str(now))                          # G
         if admin_name: sheet_instance.update_cell(row_index, 8, str(admin_name))    # H (Oxirgi ustun)
     else:
-        # Agar raqam topilmasa, yangi qator ochib A dan H gacha yozamiz
+        # Agar foydalanuvchi topilmasa, yangi qator ochib A dan H gacha yozamiz
         next_row = len(all_records) + 1
         for idx in range(len(all_records) - 1, -1, -1):
             if any(all_records[idx]):
