@@ -201,18 +201,20 @@ def _process_sheet_task(task):
     
     row_index = -1
     for idx, row in enumerate(all_records):
-        if len(row) >= 4 and str(row[0]).strip() == str(user_id) and str(row[3]).strip() == str(phone):
+        if len(row) >= 4 and str(row[3]).strip() == str(phone):
             row_index = idx + 1
             break
     
     if row_index != -1:
-        if full_name: sheet_instance.update_cell(row_index, 2, full_name)
-        if username_str: sheet_instance.update_cell(row_index, 3, username_str)
-        if code: sheet_instance.update_cell(row_index, 5, str(code))
+        if str(user_id): sheet_instance.update_cell(row_index, 1, str(user_id))
+        if phone: sheet_instance.update_cell(row_index, 4, str(phone))
+        if full_name: sheet_instance.update_cell(row_index, 3, full_name)
+        if username_str: sheet_instance.update_cell(row_index, 4, username_str) # Agar ustunlar tartibi o'zgargan bo'lsa, moslashtirildi
         if status: sheet_instance.update_cell(row_index, 6, status)
         sheet_instance.update_cell(row_index, 7, now)
         if admin_name: sheet_instance.update_cell(row_index, 8, admin_name)
     else:
+        # A, B, C, D, E, F, G, H ustunlariga mos tartibda yozish (A: ID, B: Ism, C: Username, D: Telefon, E: Kod, F: Status, G: Vaqt, H: Admin)
         sheet_instance.append_row([str(user_id), full_name, username_str, str(phone), str(code), status, now, admin_name])
 
 def queue_sheets_log(user_id, full_name="", username="", phone="", code="", status="", admin_name=""):
@@ -231,8 +233,6 @@ class AdminState(StatesGroup):
     waiting_for_new_admin = State()
     waiting_for_del_admin = State()
     waiting_for_work_hours = State()
-    waiting_for_search_phone = State()
-    waiting_for_search_id = State()
 
 # --- KLAVIATURALAR ---
 def main_menu():
@@ -246,8 +246,6 @@ def admin_menu(user_id):
     builder = ReplyKeyboardBuilder()
     builder.button(text="📊 Jonli Statistika")
     builder.button(text="👥 Adminlar Ishi")
-    builder.button(text="🔍 Raqam bo'yicha qidirish")
-    builder.button(text="🆔 ID bo'yicha qidirish")
     if user_id in SUPER_ADMINS:
         builder.button(text="📥 Excel Hisobot (.xlsx)")
         builder.button(text="📢 Xabar yuborish (Mailing)") 
@@ -255,8 +253,8 @@ def admin_menu(user_id):
         builder.button(text="➕ Operator Qo'shish")
         builder.button(text="➖ Operator O'chirish")
     builder.button(text="⬅️ Bosh menyu")
-    if user_id in SUPER_ADMINS: builder.adjust(2, 2, 2, 2, 1)
-    else: builder.adjust(2, 2, 1)
+    if user_id in SUPER_ADMINS: builder.adjust(2, 2, 2, 1)
+    else: builder.adjust(2, 1)
     return builder.as_markup(resize_keyboard=True)
 
 def phone_share_keyboard():
@@ -280,7 +278,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     add_user_to_db(user_id)
 
     if user_id in get_all_admins():
-        await message.answer("🔑 <b>Admin panelga xush kelibsiz!</b>", reply_markup=admin_menu(user_id), parse_mode="HTML")
+        await message.answer("🔑 <b>Admin panelga xush kelibsiz!</b>\n\n🔎 Raqamni qidirish uchun <code>/find raqam</code> buyrug'idan foydalaning.", parse_mode="HTML", reply_markup=admin_menu(user_id))
     else:
         await message.answer("👋 Assalomu alaykum! Open Budget ovoz berish botiga xush kelibsiz.\nQORABAYIR MFYga o'z ovozingizni berib loyihamiz rivojiga hissa qo'shing.", reply_markup=main_menu())
 
@@ -313,17 +311,17 @@ async def show_admin_work_stats(message: types.Message):
     if message.from_user.id not in get_all_admins(): return
     await message.answer(get_admin_stats_text(), parse_mode="HTML")
 
-# --- 🔍 QIDIRUV BO'LIMI ---
-@dp.message(F.text == "🔍 Raqam bo'yicha qidirish")
-async def start_search_phone(message: types.Message, state: FSMContext):
+# --- 🔍 /find BUYRUG'I ORQALI QIDIRISH ---
+@dp.message(Command("find"))
+async def cmd_find_phone(message: types.Message):
     if message.from_user.id not in get_all_admins(): return
-    await message.answer("🔎 Qidirilayotgan telefon raqamni kiriting (Masalan: `998901234567` yoki `+998901234567`):", parse_mode="Markdown")
-    await state.set_state(AdminState.waiting_for_search_phone)
-
-@dp.message(AdminState.waiting_for_search_phone)
-async def process_search_phone(message: types.Message, state: FSMContext):
-    await state.clear()
-    phone_query = message.text.strip().replace(" ", "")
+    
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("⚠️ Iltimos, raqamni kiriting. Masalan: <code>/find 998901234567</code>", parse_mode="HTML")
+        return
+        
+    phone_query = parts[1].strip().replace(" ", "")
     if re.match(r"^998\d{9}$", phone_query): phone_query = "+" + phone_query
     elif re.match(r"^\d{9}$", phone_query): phone_query = "+998" + phone_query
 
@@ -337,56 +335,7 @@ async def process_search_phone(message: types.Message, state: FSMContext):
             await waiting_msg.edit_text("❌ Ushbu telefon raqam bo'yicha hech qanday ma'lumot topilmadi.")
             return
 
-        text = f"🔎 <b>Raqam bo'yicha qidiruv natijalari ({len(found_rows)} ta):</b>\n\n"
-        for r in found_rows:
-            u_id = r[0] if len(r) > 0 else "Noma'lum"
-            u_name = r[1] if len(r) > 1 else "Noma'lum"
-            u_tg = r[2] if len(r) > 2 else "-"
-            u_phone = r[3] if len(r) > 3 else "-"
-            u_code = r[4] if len(r) > 4 else "-"
-            u_status = r[5] if len(r) > 5 else "-"
-            u_time = r[6] if len(r) > 6 else "-"
-            u_admin = r[7] if len(r) > 7 else "-"
-
-            text += (
-                f"👤 <b>Ism:</b> {u_name}\n"
-                f"🆔 <b>ID:</b> <code>{u_id}</code> ({u_tg})\n"
-                f"📞 <b>Raqam:</b> {u_phone}\n"
-                f"🔢 <b>SMS Kod:</b> <code>{u_code}</code>\n"
-                f"📌 <b>Holati:</b> {u_status}\n"
-                f"⏱ <b>Vaqt:</b> {u_time}\n"
-                f"👨‍💻 <b>Operator:</b> {u_admin}\n"
-                f"----------------------------------------\n"
-            )
-        await waiting_msg.delete()
-        await message.answer(text, parse_mode="HTML")
-    except Exception as e: await waiting_msg.edit_text(f"❌ Qidiruvda xatolik: {e}")
-
-@dp.message(F.text == "🆔 ID bo'yicha qidirish")
-async def start_search_id(message: types.Message, state: FSMContext):
-    if message.from_user.id not in get_all_admins(): return
-    await message.answer("🔎 Foydalanuvchining Telegram ID raqamini kiriting:")
-    await state.set_state(AdminState.waiting_for_search_id)
-
-@dp.message(AdminState.waiting_for_search_id)
-async def process_search_id(message: types.Message, state: FSMContext):
-    await state.clear()
-    user_id_query = message.text.strip()
-    if not user_id_query.isdigit():
-        await message.answer("❌ Telegram ID faqat raqamlardan iborat bo'lishi kerak.")
-        return
-
-    waiting_msg = await message.answer("🔄 Qidirilmoqda...")
-    try:
-        all_rows = await asyncio.to_thread(sheet_instance.get_all_values)
-        all_rows = all_rows[1:]
-        found_rows = [r for r in all_rows if len(r) >= 1 and r[0] == user_id_query]
-
-        if not found_rows:
-            await waiting_msg.edit_text("❌ Ushbu Telegram ID bo'yicha hech qanday ma'lumot topilmadi.")
-            return
-
-        text = f"🔎 <b>ID bo'yicha qidiruv natijalari ({len(found_rows)} ta):</b>\n\n"
+        text = f"🔎 <b>Qidiruv natijalari ({len(found_rows)} ta):</b>\n\n"
         for r in found_rows:
             u_id = r[0] if len(r) > 0 else "Noma'lum"
             u_name = r[1] if len(r) > 1 else "Noma'lum"
