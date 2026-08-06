@@ -200,22 +200,15 @@ def _process_sheet_task(task):
     row_index = -1
     clean_phone = phone.strip().replace(" ", "") if phone else ""
 
-    # 1. A ustun (user_id) bo'yicha qatorni qidiramiz
-    for idx, row in enumerate(all_records):
-        if idx == 0: continue
-        if len(row) > 0 and str(row[0]).strip() == str(user_id):
-            row_index = idx + 1
-            break
-            
-    # 2. D ustun (telefon) bo'yicha qidiramiz
-    if row_index == -1 and clean_phone:
+    # Telefon raqami bo'yicha qatorni qidiramiz
+    if clean_phone:
         for idx, row in enumerate(all_records):
             if idx == 0: continue
-            if len(row) > 3 and clean_phone in str(row[3]).strip().replace(" ", ""):
+            if len(row) > 3 and clean_phone == str(row[3]).strip().replace(" ", ""):
                 row_index = idx + 1
                 break
 
-    # 3. Agar qator topilsa - faqat o'sha qatorni yangilaymiz
+    # Agar bu raqam oldindan jadvalda bo'lsa - faqat o'sha qatorni yangilaymiz (status o'zgarganda)
     if row_index != -1:
         if user_id: sheet_instance.update_cell(row_index, 1, str(user_id))
         if full_name: sheet_instance.update_cell(row_index, 2, str(full_name))
@@ -226,7 +219,7 @@ def _process_sheet_task(task):
         sheet_instance.update_cell(row_index, 7, str(now))
         if admin_name: sheet_instance.update_cell(row_index, 8, str(admin_name))
     else:
-        # 4. Agar topilmasa, jadvaldagi haqiqiy oxirgi qatorni topib, uning tagiga yozamiz
+        # Agar yangi raqam bo'lsa, har doim jadvaldagi yangi (oxirgi) qatordan boshlab yozamiz
         next_row = len(all_records) + 1
         for idx in range(len(all_records) - 1, -1, -1):
             if any(all_records[idx]):
