@@ -197,17 +197,21 @@ def _process_sheet_task(task):
     now = datetime.now(UZ_TZ).strftime("%Y-%m-%d %H:%M:%S")
     username_str = f"@{username}" if username else "Mavjud emas"
     
+    clean_phone = phone.strip().replace(" ", "") if phone else ""
     row_index = -1
 
-    # 🔍 Faqat user_id (A ustun) bo'yicha jadvaldan oxirgi mos qatorni qidiramiz
-    if user_id:
+    # 🔍 Ayni shu user_id va AYNAN O'SHA TELEFON RAQAM mos keladigan qatorni qidiramiz
+    if user_id and clean_phone:
         for idx in range(len(all_records) - 1, 0, -1):
             row = all_records[idx]
-            if len(row) > 0 and str(row[0]).strip() == str(user_id):
-                row_index = idx + 1
-                break  # Topilgach, faqat o'sha qatorni yangilash uchun to'xtaymiz
+            if len(row) > 3:
+                r_uid = str(row[0]).strip()
+                r_phone = str(row[3]).strip().replace(" ", "")
+                if r_uid == str(user_id) and r_phone == clean_phone:
+                    row_index = idx + 1
+                    break
 
-    # Agar o'sha user_id ga tegishli qator topilsa - H ustunidan o'tmagan holda faqat o'sha qatorni tahrirlaymiz
+    # Agar o'sha user_id VA o'sha telefon raqam uchun qator mavjud bo'lsa - faqat o'shani yangilaymiz
     if row_index != -1:
         if user_id: sheet_instance.update_cell(row_index, 1, str(user_id))          # A
         if full_name: sheet_instance.update_cell(row_index, 2, str(full_name))      # B
@@ -219,7 +223,7 @@ def _process_sheet_task(task):
         sheet_instance.update_cell(row_index, 7, str(now))                          # G
         if admin_name: sheet_instance.update_cell(row_index, 8, str(admin_name))    # H (Oxirgi ustun)
     else:
-        # Agar foydalanuvchi topilmasa, yangi qator ochib A dan H gacha yozamiz
+        # AGAR YANGI RAQAM BO'LSA - yangi qator ochib, pastdan yozamiz
         next_row = len(all_records) + 1
         for idx in range(len(all_records) - 1, -1, -1):
             if any(all_records[idx]):
