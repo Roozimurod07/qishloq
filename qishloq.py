@@ -201,11 +201,13 @@ def _process_sheet_task(task):
     
     row_index = -1
     for idx, row in enumerate(all_records):
-        if len(row) >= 4 and row[0] == str(user_id) and row[3] == str(phone):
+        if len(row) >= 4 and str(row[0]).strip() == str(user_id) and str(row[3]).strip() == str(phone):
             row_index = idx + 1
             break
     
     if row_index != -1:
+        if full_name: sheet_instance.update_cell(row_index, 2, full_name)
+        if username_str: sheet_instance.update_cell(row_index, 3, username_str)
         if code: sheet_instance.update_cell(row_index, 5, str(code))
         if status: sheet_instance.update_cell(row_index, 6, status)
         sheet_instance.update_cell(row_index, 7, now)
