@@ -175,6 +175,7 @@ def init_sheets_sync():
         records = sheet_instance.get_all_values()
         for row in records[1:]:
             if len(row) >= 4 and row[3]:
+                # Faqat muvaffaqiyatli yoki jarayonda bo'lgan qat'iy holatlar keshga olinadi (Foydalanuvchi bekor qilganlar keshdan chiqariladi)
                 if len(row) >= 6 and row[5] in ["Admin qabul qildi", "Kod kiritildi", "Kod tasdiqlandi", "Skrinshot keldi", "Muvaffaqiyatli"]:
                     used_phones_cache.add(row[3])
         logging.info(f"✅ Sheets ulindi va {len(used_phones_cache)} ta raqam keshga olindi.")
@@ -284,6 +285,13 @@ def cancel_keyboard():
 
 # --- YORDAMCHI FUNKSIYA: BEKOR QILINGANDA ADMINLARGA XABAR BERISH ---
 async def notify_admins_cancelled(user_id: int, reason_text: str = "Foydalanuvchi bekor qildi"):
+    # Agar raqam keshda saqlangan bo'lsa va bekor qilinsa, keshdan olib tashlaymiz ki qayta kirita olsin
+    u_state = dp.fsm.resolve_context(bot, chat_id=user_id, user_id=user_id)
+    u_data = await u_state.get_data()
+    phone = u_data.get("phone")
+    if phone and phone in used_phones_cache:
+        used_phones_cache.discard(phone)
+
     if user_id in admin_message_ids:
         async def edit_admin_msg(a_id, m_id):
             try:
