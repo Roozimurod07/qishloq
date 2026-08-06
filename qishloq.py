@@ -488,7 +488,7 @@ async def start_voting(message: types.Message, state: FSMContext):
         await message.answer(f"🌙 Bot hozirda yopiq! Ish vaqti: {get_db_setting('start_time', '07:00')} - {get_db_setting('end_time', '23:00')}")
         return
     await state.clear()
-    await message.answer("👤 Iltimos, ism va familiyangizni kiriting:", reply_markup=cancel_keyboard())
+    await message.answer("👤 Iltimos, raqam egasini ism va familiyasini kiriting:", reply_markup=cancel_keyboard())
     await state.set_state(VoteState.waiting_for_name)
 
 @dp.message(F.text == "❌ Bekor qilish", VoteState.waiting_for_name)
