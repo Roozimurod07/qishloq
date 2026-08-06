@@ -499,10 +499,10 @@ async def cancel_at_name(message: types.Message, state: FSMContext):
 async def process_name(message: types.Message, state: FSMContext):
     user_name = message.text.strip()
     if len(user_name) < 3 or user_name == "❌ Bekor qilish":
-        await message.answer("⚠️ Iltimos, ism va familiyangizni to'liq kiriting:"); return
+        await message.answer("⚠️ Iltimos, raqam egasini ism va familiyasini to'liq kiriting:"); return
 
     await state.update_data(full_name=user_name)
-    await message.answer("📱 Rahmat! Endi telefon raqamingizni yuboring yoki kiriting:", reply_markup=phone_share_keyboard())
+    await message.answer("📱 Rahmat! Endi telefon raqamingizni yuboring yoki kiriting: Misol +998901234567.", reply_markup=phone_share_keyboard())
     await state.set_state(VoteState.waiting_for_phone)
 
 @dp.message(F.text == "❌ Bekor qilish", VoteState.waiting_for_phone)
