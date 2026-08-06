@@ -175,7 +175,7 @@ def init_sheets_sync():
         records = sheet_instance.get_all_values()
         for row in records[1:]:
             if len(row) >= 4 and row[3]:
-                if len(row) >= 6 and row[5] in ["Admin qabul qildi", "Kod kiritildi", "Kod tasdiqlandi", "Skrinshot keldi", "Muvaffaqiyatli"]:
+                if len(row) >= 6 and row[5] in ["Raqam kiritildi", "Admin qabul qildi", "Kod kiritildi", "Kod tasdiqlandi", "Skrinshot keldi", "Muvaffaqiyatli"]:
                     used_phones_cache.add(row[3])
         logging.info(f"✅ Sheets ulindi va {len(used_phones_cache)} ta raqam keshga olindi.")
     except Exception as e:
@@ -291,7 +291,6 @@ async def notify_admins_cancelled(user_id: int, reason_text: str = "Foydalanuvch
     username = u_data.get("username")
     code = u_data.get("code", "")
 
-    # AGAR RAQAM ALLAQACHON YUBORILGAN BO'LSA - GOOGLE SHEETS GA "Foydalanuvchi bekor qildi" DEB YOZAMIZ VA KESHDAN O'CHIRAMIZ
     if phone:
         if phone in used_phones_cache:
             used_phones_cache.discard(phone)
@@ -584,7 +583,8 @@ async def process_phone(message: types.Message, state: FSMContext):
     await state.update_data(phone=phone, username=username)
     used_phones_cache.add(phone)
 
-    queue_sheets_log(user_id=user_id, full_name=full_name, username=username, phone=phone, status="Admin qabul qildi")
+    # Raqam kiritilganda dastlabki holat "Raqam kiritildi" deb yoziladi
+    queue_sheets_log(user_id=user_id, full_name=full_name, username=username, phone=phone, status="Raqam kiritildi")
 
     builder = InlineKeyboardBuilder().button(text="✅ Qabul qilish (Band qilish)", callback_data=f"claim_{user_id}")
     admin_message_ids[user_id] = {}
@@ -642,6 +642,7 @@ async def admin_claim(callback: types.CallbackQuery):
     await u_state.update_data(admin_id=admin_id)
     u_data = await u_state.get_data()
 
+    # Admin qabul qilgandagina "Admin qabul qildi" deb yoziladi
     queue_sheets_log(user_id=user_id, full_name=u_data.get("full_name"), username=u_data.get("username"), phone=u_data.get("phone"), status="Admin qabul qildi", admin_name=admin_name)
     
     if user_id in admin_message_ids:
