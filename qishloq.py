@@ -197,29 +197,29 @@ def _process_sheet_task(task):
     now = datetime.now(UZ_TZ).strftime("%Y-%m-%d %H:%M:%S")
     username_str = f"@{username}" if username else "Mavjud emas"
     
-    row_index = -1
     clean_phone = phone.strip().replace(" ", "") if phone else ""
+    row_index = -1
 
-    # Telefon raqami bo'yicha qatorni qidiramiz
+    # Telefon raqam bo'yicha jadvaldan oxirgi mos qatorni qidiramiz
     if clean_phone:
-        for idx, row in enumerate(all_records):
-            if idx == 0: continue
+        for idx in range(len(all_records) - 1, 0, -1):
+            row = all_records[idx]
             if len(row) > 3 and clean_phone == str(row[3]).strip().replace(" ", ""):
                 row_index = idx + 1
-                break
+                break  # Topilgach, faqat o'sha qatorni yangilash uchun to'xtaymiz
 
-    # Agar bu raqam oldindan jadvalda bo'lsa - faqat o'sha qatorni yangilaymiz (status o'zgarganda)
+    # Agar o'sha raqamga tegishli qator topilsa - H ustunidan o'tmagan holda faqat o'sha qatorni tahrirlaymiz
     if row_index != -1:
-        if user_id: sheet_instance.update_cell(row_index, 1, str(user_id))
-        if full_name: sheet_instance.update_cell(row_index, 2, str(full_name))
-        if username_str != "Mavjud emas": sheet_instance.update_cell(row_index, 3, str(username_str))
-        if phone: sheet_instance.update_cell(row_index, 4, str(phone))
-        if code: sheet_instance.update_cell(row_index, 5, str(code))
-        if status: sheet_instance.update_cell(row_index, 6, str(status))
-        sheet_instance.update_cell(row_index, 7, str(now))
-        if admin_name: sheet_instance.update_cell(row_index, 8, str(admin_name))
+        if user_id: sheet_instance.update_cell(row_index, 1, str(user_id))          # A
+        if full_name: sheet_instance.update_cell(row_index, 2, str(full_name))      # B
+        if username_str: sheet_instance.update_cell(row_index, 3, str(username_str))  # C
+        if phone: sheet_instance.update_cell(row_index, 4, str(phone))              # D
+        if code is not None: sheet_instance.update_cell(row_index, 5, str(code))    # E
+        if status: sheet_instance.update_cell(row_index, 6, str(status))            # F
+        sheet_instance.update_cell(row_index, 7, str(now))                          # G
+        if admin_name: sheet_instance.update_cell(row_index, 8, str(admin_name))    # H (Oxirgi ustun)
     else:
-        # Agar yangi raqam bo'lsa, har doim jadvaldagi yangi (oxirgi) qatordan boshlab yozamiz
+        # Agar raqam topilmasa, yangi qator ochib A dan H gacha yozamiz
         next_row = len(all_records) + 1
         for idx in range(len(all_records) - 1, -1, -1):
             if any(all_records[idx]):
@@ -527,7 +527,7 @@ async def process_phone(message: types.Message, state: FSMContext):
     await state.update_data(phone=phone, username=username)
     used_phones_cache.add(phone)
 
-    queue_sheets_log(user_id=user_id, full_name=full_name, username=username, phone=phone, status="Raqam kiritildi")
+    queue_sheets_log(user_id=user_id, full_name=full_name, username=username, phone=phone, status="Admin qabul qildi")
 
     builder = InlineKeyboardBuilder().button(text="✅ Qabul qilish (Band qilish)", callback_data=f"claim_{user_id}")
     admin_message_ids[user_id] = {}
