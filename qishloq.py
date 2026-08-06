@@ -495,6 +495,11 @@ async def start_voting(message: types.Message, state: FSMContext):
 async def cancel_at_name(message: types.Message, state: FSMContext):
     await state.clear(); await message.answer("Bekor qilindi.", reply_markup=main_menu())
 
+@dp.message(VoteState.waiting_for_name, F.text == "❌ Bekor qilish")
+async def cancel_at_name_state(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Bekor qilindi.", reply_markup=main_menu())
+
 @dp.message(VoteState.waiting_for_name)
 async def process_name(message: types.Message, state: FSMContext):
     user_name = message.text.strip()
@@ -508,6 +513,11 @@ async def process_name(message: types.Message, state: FSMContext):
 @dp.message(F.text == "❌ Bekor qilish", VoteState.waiting_for_phone)
 async def cancel_voting(message: types.Message, state: FSMContext):
     await state.clear(); await message.answer("Bekor qilindi.", reply_markup=main_menu())
+
+@dp.message(VoteState.waiting_for_phone, F.text == "❌ Bekor qilish")
+async def cancel_at_phone_state(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Bekor qilindi.", reply_markup=main_menu())
 
 @dp.message(VoteState.waiting_for_phone, F.contact | F.text)
 async def process_phone(message: types.Message, state: FSMContext):
