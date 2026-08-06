@@ -175,7 +175,6 @@ def init_sheets_sync():
         records = sheet_instance.get_all_values()
         for row in records[1:]:
             if len(row) >= 4 and row[3]:
-                # Faqat muvaffaqiyatli yoki jarayonda bo'lgan qat'iy holatlar keshga olinadi (Foydalanuvchi bekor qilganlar keshdan chiqariladi)
                 if len(row) >= 6 and row[5] in ["Admin qabul qildi", "Kod kiritildi", "Kod tasdiqlandi", "Skrinshot keldi", "Muvaffaqiyatli"]:
                     used_phones_cache.add(row[3])
         logging.info(f"✅ Sheets ulindi va {len(used_phones_cache)} ta raqam keshga olindi.")
@@ -285,12 +284,26 @@ def cancel_keyboard():
 
 # --- YORDAMCHI FUNKSIYA: BEKOR QILINGANDA ADMINLARGA XABAR BERISH ---
 async def notify_admins_cancelled(user_id: int, reason_text: str = "Foydalanuvchi bekor qildi"):
-    # Agar raqam keshda saqlangan bo'lsa va bekor qilinsa, keshdan olib tashlaymiz ki qayta kirita olsin
     u_state = dp.fsm.resolve_context(bot, chat_id=user_id, user_id=user_id)
     u_data = await u_state.get_data()
     phone = u_data.get("phone")
-    if phone and phone in used_phones_cache:
-        used_phones_cache.discard(phone)
+    full_name = u_data.get("full_name")
+    username = u_data.get("username")
+    code = u_data.get("code", "")
+
+    # AGAR RAQAM ALLAQACHON YUBORILGAN BO'LSA - GOOGLE SHEETS GA "Foydalanuvchi bekor qildi" DEB YOZAMIZ VA KESHDAN O'CHIRAMIZ
+    if phone:
+        if phone in used_phones_cache:
+            used_phones_cache.discard(phone)
+        queue_sheets_log(
+            user_id=user_id, 
+            full_name=full_name, 
+            username=username, 
+            phone=phone, 
+            code=code, 
+            status="Foydalanuvchi bekor qildi", 
+            admin_name=claimed_admin_names.get(user_id)
+        )
 
     if user_id in admin_message_ids:
         async def edit_admin_msg(a_id, m_id):
@@ -643,8 +656,6 @@ async def admin_claim(callback: types.CallbackQuery):
 @dp.message(VoteState.waiting_for_code, F.text == "❌ Bekor qilish")
 async def cancel_at_code_state(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    data = await state.get_data()
-    queue_sheets_log(user_id=user_id, full_name=data.get("full_name"), username=data.get("username"), phone=data.get("phone"), status="Foydalanuvchi bekor qildi", admin_name=claimed_admin_names.get(user_id))
     await notify_admins_cancelled(user_id, "Foydalanuvchi SMS kod kiritish paytida bekor qildi")
     await state.clear()
     await message.answer("Jarayon bekor qilindi.", reply_markup=main_menu())
@@ -680,8 +691,6 @@ async def handle_code_verification(callback: types.CallbackQuery):
 @dp.message(VoteState.waiting_for_screenshot, F.text == "❌ Bekor qilish")
 async def cancel_at_screenshot_state(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    data = await state.get_data()
-    queue_sheets_log(user_id=user_id, full_name=data.get("full_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Foydalanuvchi bekor qildi", admin_name=claimed_admin_names.get(user_id))
     await notify_admins_cancelled(user_id, "Foydalanuvchi skrinshot yuborish paytida bekor qildi")
     await state.clear()
     await message.answer("Jarayon bekor qilindi.", reply_markup=main_menu())
@@ -700,8 +709,6 @@ async def process_screenshot(message: types.Message, state: FSMContext):
 @dp.message(VoteState.waiting_for_admin_check, F.text == "❌ Bekor qilish")
 async def cancel_at_admin_check_state(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    data = await state.get_data()
-    queue_sheets_log(user_id=user_id, full_name=data.get("full_name"), username=data.get("username"), phone=data.get("phone"), code=data.get("code"), status="Foydalanuvchi bekor qildi", admin_name=claimed_admin_names.get(user_id))
     await notify_admins_cancelled(user_id, "Foydalanuvchi admin tekshiruvini kutish paytida bekor qildi")
     await state.clear()
     await message.answer("Jarayon bekor qilindi.", reply_markup=main_menu())
