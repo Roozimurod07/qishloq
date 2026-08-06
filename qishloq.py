@@ -200,14 +200,14 @@ def _process_sheet_task(task):
     row_index = -1
     clean_phone = phone.strip().replace(" ", "") if phone else ""
 
-    # 1-usul: user_id bo'yicha qatorni topish (1-ustun index 0)
+    # 1. Avval user_id bo'yicha qatorni qidiramiz (1-ustun: A ustuni)
     for idx, row in enumerate(all_records):
         if idx == 0: continue
         if len(row) > 0 and str(row[0]).strip() == str(user_id):
             row_index = idx + 1
             break
             
-    # 2-usul: Agar user_id topilmasa, telefon raqam bo'yicha qidirish (4-ustun index 3)
+    # 2. Agar topilmasa, telefon raqam bo'yicha qidiramiz (4-ustun: D ustuni)
     if row_index == -1 and clean_phone:
         for idx, row in enumerate(all_records):
             if idx == 0: continue
@@ -215,20 +215,19 @@ def _process_sheet_task(task):
                 row_index = idx + 1
                 break
 
+    # 3. Agar qator topilsa, faqat o'sha qatorning katakchalarini yangilaymiz (siljish bo'lmaydi)
     if row_index != -1:
-        existing_row = all_records[row_index - 1]
-        
-        f_id = str(user_id) if user_id else (existing_row[0] if len(existing_row) > 0 else "")
-        f_name = str(full_name) if full_name else (existing_row[1] if len(existing_row) > 1 else "")
-        f_user = str(username_str) if username_str != "Mavjud emas" else (existing_row[2] if len(existing_row) > 2 else "Mavjud emas")
-        f_phone = str(phone) if phone else (existing_row[3] if len(existing_row) > 3 else "")
-        f_code = str(code) if code else (existing_row[4] if len(existing_row) > 4 else "")
-        f_status = str(status) if status else (existing_row[5] if len(existing_row) > 5 else "")
-        f_time = str(now)
-        f_admin = str(admin_name) if admin_name else (existing_row[7] if len(existing_row) > 7 else "")
-
-        sheet_instance.update(f"A{row_index}:H{row_index}", [[f_id, f_name, f_user, f_phone, f_code, f_status, f_time, f_admin]])
+        if user_id: sheet_instance.update_cell(row_index, 1, str(user_id))          # A ustun
+        if full_name: sheet_instance.update_cell(row_index, 2, str(full_name))      # B ustun
+        if username_str != "Mavjud emas": 
+            sheet_instance.update_cell(row_index, 3, str(username_str))             # C ustun
+        if phone: sheet_instance.update_cell(row_index, 4, str(phone))              # D ustun
+        if code: sheet_instance.update_cell(row_index, 5, str(code))                # E ustun
+        if status: sheet_instance.update_cell(row_index, 6, str(status))            # F ustun
+        sheet_instance.update_cell(row_index, 7, str(now))                          # G ustun
+        if admin_name: sheet_instance.update_cell(row_index, 8, str(admin_name))    # H ustun
     else:
+        # Agar umuman topilmasa, oxiriga yangi qator qo'shamiz
         sheet_instance.append_row([str(user_id), str(full_name), str(username_str), str(phone), str(code), str(status), str(now), str(admin_name)])
 
 def queue_sheets_log(user_id, full_name="", username="", phone="", code="", status="", admin_name=""):
